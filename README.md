@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CycleWhere MVP
 
 CycleWhere is a route-first Singapore group cycling planner for 2 to 10 people. It looks for route endpoints that keep everyone's journey home reasonably fair by public transport, then returns multiple route options from the same start point in ascending distance order.
@@ -71,3 +72,7 @@ Before deploying for real, update [wrangler.toml](./wrangler.toml) with a real D
 ## Notes on live data
 
 The app is structured around Singapore open-data and official route evidence, but this MVP intentionally keeps the actual graph lightweight so the repo stays easy to run and inspect. The next production step is to replace the seeded corridor geometry with a generated graph from LTA, NParks, Park Connector Loop, and OSM data while keeping the same planner interfaces.
+=======
+# CycleWhere
+Vibe Coded idea I got from Soong QR 
+>>>>>>> 3c6ebb051fd4d8f78b4f45f51516570ac64ce7fb
