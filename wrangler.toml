@@ -1,0 +1,11 @@
+name = "cyclewhere-api"
+main = "worker/index.ts"
+compatibility_date = "2026-06-18"
+
+[[d1_databases]]
+binding = "TRANSIT_CACHE"
+database_name = "cyclewhere-transit-cache"
+database_id = "replace-with-real-d1-id"
+
+[vars]
+CORS_ORIGIN = "*"
