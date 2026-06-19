@@ -11,4 +11,9 @@ database_id = "40d3dd74-5c27-4839-8e21-c7f597946098"
 CORS_ORIGIN = "http://127.0.0.1:5173,http://127.0.0.1:5174"
 
 [env.production.vars]
-CORS_ORIGIN = "https://your-site.pages.dev"
+CORS_ORIGIN = "https://cyclewhere.pages.dev"
+
+[[env.production.d1_databases]]
+binding = "TRANSIT_CACHE"
+database_name = "cyclewhere-transit-cache"
+database_id = "40d3dd74-5c27-4839-8e21-c7f597946098"
