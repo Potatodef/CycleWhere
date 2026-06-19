@@ -20,6 +20,13 @@ const themeOptions: Array<{ id: ThemeId; label: string; description: string }> =
   { id: "warm-clay", label: "Warm Clay", description: "Warmer surfaces for lighter A/B testing." }
 ];
 
+const avatarColors = [
+  { avatar: "oklch(48% 0.14 158)", rowBg: "oklch(97% 0.006 158)", border: "oklch(92% 0.012 158)" },
+  { avatar: "oklch(52% 0.12 55)",  rowBg: "oklch(97% 0.008 55)",  border: "oklch(92% 0.015 55)" },
+  { avatar: "oklch(50% 0.12 280)", rowBg: "oklch(97% 0.006 280)", border: "oklch(92% 0.012 280)" },
+  { avatar: "oklch(55% 0.12 85)",  rowBg: "oklch(97% 0.008 85)",  border: "oklch(92% 0.015 85)" },
+];
+
 const exampleHomes = [
   { id: "1", name: "Ariel", address: "Bedok Reservoir" },
   { id: "2", name: "Ben", address: "Tampines Central" },
@@ -279,6 +286,25 @@ export function App() {
   }
 
   return (
+    <>
+    <nav className="top-nav">
+      <div className="top-nav-brand">
+        <svg width="26" height="26" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+          <rect width="40" height="40" rx="10" fill="oklch(38% 0.13 158)" />
+          <circle cx="13" cy="24" r="6" stroke="white" strokeWidth="1.5" fill="none" />
+          <circle cx="27" cy="24" r="6" stroke="white" strokeWidth="1.5" fill="none" />
+          <path d="M13 24 L18 14 L23 14" stroke="oklch(82% 0.14 85)" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          <path d="M23 14 L27 24 L20 24" stroke="white" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+          <circle cx="18" cy="14" r="1.3" fill="oklch(82% 0.14 85)" />
+        </svg>
+        <span>CycleWhere</span>
+      </div>
+      <nav className="top-nav-links">
+        <a href="#" className="active">Planner</a>
+        <a href="#">How it works</a>
+        <a href="#">About</a>
+      </nav>
+    </nav>
     <div className="app-shell">
       <div className="bg-orb bg-orb-one" />
       <div className="bg-orb bg-orb-two" />
@@ -320,23 +346,24 @@ export function App() {
             description="The planning time defaults to now, rounded to five minutes, but you can pin a specific departure just like a map app."
           />
 
-          <label className="field">
-            <span>Start location</span>
-            <input
-              value={startQuery}
-              onChange={(event) => setStartQuery(event.target.value)}
-              placeholder="Marina Bay"
-            />
-          </label>
-
-          <label className="field">
-            <span>Planned start time</span>
-            <input
-              type="datetime-local"
-              value={startTime}
-              onChange={(event) => setStartTime(event.target.value)}
-            />
-          </label>
+          <div className="input-pair">
+            <label className="field">
+              <span>Start location</span>
+              <input
+                value={startQuery}
+                onChange={(event) => setStartQuery(event.target.value)}
+                placeholder="Marina Bay"
+              />
+            </label>
+            <label className="field">
+              <span>Planned start time</span>
+              <input
+                type="datetime-local"
+                value={startTime}
+                onChange={(event) => setStartTime(event.target.value)}
+              />
+            </label>
+          </div>
 
           <div className="participants-header">
             <div>
@@ -349,36 +376,47 @@ export function App() {
           </div>
 
           <div className="participant-list">
-            {participants.map((participant, index) => (
-              <div className="participant-card" key={participant.id}>
-                <div className="participant-card-top">
-                  <strong>Person {index + 1}</strong>
+            {participants.map((participant, index) => {
+              const colors = avatarColors[index % 4];
+              return (
+                <div
+                  className="participant-row"
+                  key={participant.id}
+                  style={{ background: colors.rowBg, border: `1px solid ${colors.border}` }}
+                >
+                  <div className="participant-avatar" style={{ background: colors.avatar }}>
+                    {participant.name ? participant.name[0].toUpperCase() : "?"}
+                  </div>
+                  <div className="participant-info">
+                    <input
+                      className="name"
+                      value={participant.name}
+                      onChange={(event) =>
+                        updateParticipant(participant.id, "name", event.target.value)
+                      }
+                      placeholder="Name"
+                    />
+                    <input
+                      className="address"
+                      value={participant.address}
+                      onChange={(event) =>
+                        updateParticipant(participant.id, "address", event.target.value)
+                      }
+                      placeholder="Home address or area"
+                    />
+                  </div>
                   {participants.length > 2 ? (
                     <button
                       type="button"
                       className="text-button"
                       onClick={() => removeParticipant(participant.id)}
                     >
-                      Remove
+                      ×
                     </button>
                   ) : null}
                 </div>
-                <input
-                  value={participant.name}
-                  onChange={(event) =>
-                    updateParticipant(participant.id, "name", event.target.value)
-                  }
-                  placeholder="Name"
-                />
-                <input
-                  value={participant.address}
-                  onChange={(event) =>
-                    updateParticipant(participant.id, "address", event.target.value)
-                  }
-                  placeholder="Home address or area"
-                />
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="action-row">
@@ -645,5 +683,6 @@ export function App() {
         </section>
       </main>
     </div>
+    </>
   );
 }
