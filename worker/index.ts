@@ -4,23 +4,55 @@ import networkManifest from "../public/data/network-manifest.json";
 import { fallbackResolve } from "../src/lib/geocodeFallback.js";
 import { estimateTransitMinutes } from "../src/lib/transit.js";
 import type {
+  DiscoverRoutesRequest,
+  DiscoveredRoutesResponse,
   GeocodeResponse,
   TransitTimeQuery,
   TransitTimesResponse
 } from "../src/types.js";
-import { fetchTransitTimeWithOneMap, geocodeManyWithOneMap } from "./providers/onemap.js";
+import { discoverCyclingRoutes } from "./discovery.js";
+import {
+  fetchRouteWithOneMap,
+  fetchTransitTimeWithOneMap,
+  geocodeManyWithOneMap,
+  getNearbyTransportWithOneMap
+} from "./providers/onemap.js";
 
 type Bindings = {
   TRANSIT_CACHE?: D1Database;
   CORS_ORIGIN?: string;
+  ONEMAP_API_EMAIL?: string;
+  ONEMAP_API_PASSWORD?: string;
+  ONEMAP_BASE_URL?: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
 
+function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
+  const allowlist = configuredOrigins
+    ?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!allowlist?.length) {
+    return origin || "*";
+  }
+
+  if (!origin) {
+    return allowlist[0];
+  }
+
+  if (allowlist.includes("*") || allowlist.includes(origin)) {
+    return origin;
+  }
+
+  return allowlist[0];
+}
+
 app.use(
   "*",
   cors({
-    origin: (origin, context) => context.env.CORS_ORIGIN || origin || "*",
+    origin: (origin, context) => resolveCorsOrigin(origin, context.env.CORS_ORIGIN),
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type"]
   })
@@ -56,6 +88,57 @@ async function setCachedTransit(
     .run();
 }
 
+async function getCachedJson(
+  database: D1Database | undefined,
+  tableName: "route_cache" | "nearby_transport_cache",
+  key: string
+) {
+  if (!database) {
+    return null;
+  }
+
+  const row = await database
+    .prepare(`SELECT payload FROM ${tableName} WHERE cache_key = ?`)
+    .bind(key)
+    .first<{ payload: string }>();
+
+  return row?.payload ? JSON.parse(row.payload) : null;
+}
+
+async function setCachedJson(
+  database: D1Database | undefined,
+  tableName: "route_cache" | "nearby_transport_cache",
+  key: string,
+  payload: unknown
+) {
+  if (!database) {
+    return;
+  }
+
+  await database
+    .prepare(
+      `INSERT OR REPLACE INTO ${tableName} (cache_key, payload, updated_at) VALUES (?, ?, ?)`
+    )
+    .bind(key, JSON.stringify(payload), new Date().toISOString())
+    .run();
+}
+
+function roundedKey(point: { lat: number; lng: number }) {
+  return `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`;
+}
+
+app.get("/api/health", (context) =>
+  context.json({
+    ok: true,
+    service: "cyclewhere-api",
+    hasD1: Boolean(context.env.TRANSIT_CACHE),
+    hasOneMapCredentials: Boolean(
+      context.env.ONEMAP_API_EMAIL && context.env.ONEMAP_API_PASSWORD
+    ),
+    timestamp: new Date().toISOString()
+  })
+);
+
 app.get("/api/network-manifest", (context) => context.json(networkManifest));
 
 app.post("/api/geocode", async (context) => {
@@ -67,7 +150,7 @@ app.post("/api/geocode", async (context) => {
   }
 
   try {
-    return context.json(await geocodeManyWithOneMap(queries));
+    return context.json(await geocodeManyWithOneMap(queries, context.env));
   } catch {
     return context.json<GeocodeResponse>({
       results: queries.map((query) => fallbackResolve(query))
@@ -87,7 +170,7 @@ app.post("/api/transit-times", async (context) => {
       }
 
       try {
-        const result = await fetchTransitTimeWithOneMap(query);
+        const result = await fetchTransitTimeWithOneMap(query, context.env);
         if (typeof result.minutes === "number") {
           await setCachedTransit(context.env.TRANSIT_CACHE, cacheKey, result.minutes);
           return result;
@@ -104,6 +187,60 @@ app.post("/api/transit-times", async (context) => {
   );
 
   return context.json<TransitTimesResponse>({ results });
+});
+
+app.post("/api/discover-cycling-routes", async (context) => {
+  const payload = (await context.req.json()) as DiscoverRoutesRequest;
+
+  try {
+    const result = await discoverCyclingRoutes(payload, {
+      fetchRoute: async ({ start, end, profile }) => {
+        const cacheKey = JSON.stringify({
+          profile,
+          start: roundedKey(start),
+          end: roundedKey(end)
+        });
+        const cached = await getCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey);
+        if (cached) {
+          return cached;
+        }
+
+        const route = await fetchRouteWithOneMap({ start, end, profile }, context.env);
+        if (route) {
+          await setCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey, route);
+        }
+        return route;
+      },
+      getNearbyTransport: async (point) => {
+        const cacheKey = roundedKey(point);
+        const cached = await getCachedJson(
+          context.env.TRANSIT_CACHE,
+          "nearby_transport_cache",
+          cacheKey
+        );
+        if (cached) {
+          return cached;
+        }
+
+        const nearby = await getNearbyTransportWithOneMap(point, context.env);
+        await setCachedJson(
+          context.env.TRANSIT_CACHE,
+          "nearby_transport_cache",
+          cacheKey,
+          nearby
+        );
+        return nearby;
+      }
+    });
+
+    return context.json<DiscoveredRoutesResponse>(result);
+  } catch {
+    return context.json<DiscoveredRoutesResponse>({
+      candidates: [],
+      zoneStatuses: [],
+      liveDiscoveryStatus: "unavailable"
+    });
+  }
 });
 
 export default app;

@@ -2,16 +2,18 @@ import { fallbackResolve } from "./geocodeFallback.js";
 import { resolveTransportAnchor } from "./anchors.js";
 import { estimateTransitMinutes } from "./transit.js";
 import type {
+  DiscoverRoutesRequest,
+  DiscoveredRoutesResponse,
   GeocodeResponse,
   LocationResolution,
+  ResolvedParticipant,
   TransitTimeQuery,
   TransitTimeResult,
   TransitTimesResponse
 } from "../types.js";
 
 const apiBase =
-  (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env
-    ?.VITE_API_BASE ??
+  (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
   (window as Window & {
     __CYCLEWHERE_CONFIG__?: { apiBase?: string };
   }).__CYCLEWHERE_CONFIG__?.apiBase ??
@@ -67,6 +69,36 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
   }));
 }
 
+export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
+  if (!apiBase) {
+    return {
+      candidates: [],
+      zoneStatuses: [],
+      liveDiscoveryStatus: "unavailable"
+    } satisfies DiscoveredRoutesResponse;
+  }
+
+  try {
+    const response = await fetch(`${apiBase}/api/discover-cycling-routes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+    const payload = await safeJson<DiscoveredRoutesResponse>(response);
+    if (payload) {
+      return payload;
+    }
+  } catch {
+    // Fall back to curated-only planning.
+  }
+
+  return {
+    candidates: [],
+    zoneStatuses: [],
+    liveDiscoveryStatus: "unavailable"
+  } satisfies DiscoveredRoutesResponse;
+}
+
 export async function resolveParticipants(
   drafts: Array<{ id: string; name: string; address: string }>
 ) {
@@ -78,6 +110,6 @@ export async function resolveParticipants(
       ...draft,
       home,
       anchor: resolveTransportAnchor(home.point)
-    };
+    } satisfies ResolvedParticipant;
   });
 }

@@ -3,7 +3,8 @@ dist
 .wrangler
 .DS_Store
 coverage
-package-lock.json
 *.tsbuildinfo
 .env
 .env.local
+.dev.vars
+CODEX_HANDOFF.md

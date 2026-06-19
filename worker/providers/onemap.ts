@@ -1,9 +1,18 @@
+import { decodePolyline } from "../../src/lib/polyline.js";
 import type {
   GeocodeResponse,
+  LatLng,
   LocationResolution,
   TransitTimeQuery,
-  TransitTimeResult
+  TransitTimeResult,
+  TransportAnchor
 } from "../../src/types.js";
+
+type OneMapEnv = {
+  ONEMAP_API_EMAIL?: string;
+  ONEMAP_API_PASSWORD?: string;
+  ONEMAP_BASE_URL?: string;
+};
 
 type OneMapSearchResult = {
   SEARCHVAL?: string;
@@ -14,15 +23,98 @@ type OneMapSearchResult = {
   LONGITUDE?: string;
 };
 
+type NearbyStop = {
+  id?: string | number;
+  name?: string;
+  lat?: number;
+  lon?: number;
+  road?: string;
+};
+
+type RouteProfile = "cycling" | "walk_discovery";
+
+let accessTokenCache:
+  | {
+      token: string;
+      expiresAt: number;
+    }
+  | null = null;
+
+function baseUrl(env: OneMapEnv) {
+  return env.ONEMAP_BASE_URL || "https://www.onemap.gov.sg";
+}
+
 function toLabel(result: OneMapSearchResult) {
   return (
-    [result.BLK_NO, result.ROAD_NAME, result.BUILDING]
-      .filter(Boolean)
-      .join(" ")
-      .trim() ||
+    [result.BLK_NO, result.ROAD_NAME, result.BUILDING].filter(Boolean).join(" ").trim() ||
     result.SEARCHVAL ||
     "Matched address"
   );
+}
+
+function requireCredentials(env: OneMapEnv) {
+  if (!env.ONEMAP_API_EMAIL || !env.ONEMAP_API_PASSWORD) {
+    throw new Error("OneMap credentials are not configured");
+  }
+}
+
+async function getAccessToken(env: OneMapEnv) {
+  requireCredentials(env);
+
+  if (accessTokenCache && accessTokenCache.expiresAt > Date.now() + 5 * 60 * 1000) {
+    return accessTokenCache.token;
+  }
+
+  const response = await fetch(`${baseUrl(env)}/api/auth/post/getToken`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      email: env.ONEMAP_API_EMAIL,
+      password: env.ONEMAP_API_PASSWORD
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to retrieve OneMap token (${response.status})`);
+  }
+
+  const payload = (await response.json()) as {
+    access_token?: string;
+  };
+
+  if (!payload.access_token) {
+    throw new Error("OneMap token response did not include access_token");
+  }
+
+  accessTokenCache = {
+    token: payload.access_token,
+    expiresAt: Date.now() + 71 * 60 * 60 * 1000
+  };
+
+  return payload.access_token;
+}
+
+async function fetchWithAuth(url: string, env: OneMapEnv) {
+  const token = await getAccessToken(env);
+  let response = await fetch(url, {
+    headers: {
+      Authorization: token
+    }
+  });
+
+  if (response.status === 401) {
+    accessTokenCache = null;
+    const refreshed = await getAccessToken(env);
+    response = await fetch(url, {
+      headers: {
+        Authorization: refreshed
+      }
+    });
+  }
+
+  return response;
 }
 
 function extractBestDurationMinutes(payload: unknown): number | null {
@@ -62,18 +154,23 @@ function extractBestDurationMinutes(payload: unknown): number | null {
   return null;
 }
 
-export async function geocodeWithOneMap(query: string): Promise<LocationResolution> {
-  const url = new URL("https://www.onemap.gov.sg/api/common/elastic/search");
+export async function geocodeWithOneMap(query: string, env: OneMapEnv): Promise<LocationResolution> {
+  const url = new URL(`${baseUrl(env)}/api/common/elastic/search`);
   url.searchParams.set("searchVal", query);
   url.searchParams.set("returnGeom", "Y");
   url.searchParams.set("getAddrDetails", "Y");
   url.searchParams.set("pageNum", "1");
 
-  const response = await fetch(url.toString());
+  const response = await fetchWithAuth(url.toString(), env);
   const payload = (await response.json()) as {
     found?: number;
     results?: OneMapSearchResult[];
+    error?: string;
   };
+
+  if (payload.error) {
+    throw new Error(payload.error);
+  }
 
   const match = payload.results?.[0];
   if (!match?.LATITUDE || !match?.LONGITUDE) {
@@ -92,20 +189,24 @@ export async function geocodeWithOneMap(query: string): Promise<LocationResoluti
   };
 }
 
-export async function geocodeManyWithOneMap(queries: string[]): Promise<GeocodeResponse> {
-  const results = await Promise.all(queries.map((query) => geocodeWithOneMap(query)));
+export async function geocodeManyWithOneMap(
+  queries: string[],
+  env: OneMapEnv
+): Promise<GeocodeResponse> {
+  const results = await Promise.all(queries.map((query) => geocodeWithOneMap(query, env)));
   return { results };
 }
 
 export async function fetchTransitTimeWithOneMap(
-  query: TransitTimeQuery
+  query: TransitTimeQuery,
+  env: OneMapEnv
 ): Promise<TransitTimeResult> {
   const departure = new Date(query.departureIso);
   const pad = (value: number) => `${value}`.padStart(2, "0");
   const date = `${pad(departure.getDate())}-${pad(departure.getMonth() + 1)}-${departure.getFullYear()}`;
   const time = `${pad(departure.getHours())}:${pad(departure.getMinutes())}:00`;
 
-  const url = new URL("https://www.onemap.gov.sg/api/public/routingsvc/route");
+  const url = new URL(`${baseUrl(env)}/api/public/routingsvc/route`);
   url.searchParams.set("start", `${query.from.lat},${query.from.lng}`);
   url.searchParams.set("end", `${query.to.lat},${query.to.lng}`);
   url.searchParams.set("routeType", "pt");
@@ -114,12 +215,109 @@ export async function fetchTransitTimeWithOneMap(
   url.searchParams.set("mode", "TRANSIT");
   url.searchParams.set("maxWalkDistance", "1200");
 
-  const response = await fetch(url.toString());
+  const response = await fetchWithAuth(url.toString(), env);
   const payload = await response.json();
   const minutes = extractBestDurationMinutes(payload);
 
   return {
     minutes,
     source: "onemap"
+  };
+}
+
+export async function fetchRouteWithOneMap(
+  {
+    start,
+    end,
+    profile
+  }: {
+    start: LatLng;
+    end: LatLng;
+    profile: RouteProfile;
+  },
+  env: OneMapEnv
+) {
+  const routeType = profile === "cycling" ? "cycle" : "walk";
+  const url = new URL(`${baseUrl(env)}/api/public/routingsvc/route`);
+  url.searchParams.set("start", `${start.lat},${start.lng}`);
+  url.searchParams.set("end", `${end.lat},${end.lng}`);
+  url.searchParams.set("routeType", routeType);
+
+  const response = await fetchWithAuth(url.toString(), env);
+  if (!response.ok) {
+    throw new Error(`OneMap route request failed (${response.status})`);
+  }
+
+  const payload = (await response.json()) as {
+    route_geometry?: string;
+    route_summary?: {
+      total_time?: number;
+      total_distance?: number;
+    };
+    status?: number;
+    status_message?: string;
+  };
+
+  if (!payload.route_geometry || payload.status !== 0) {
+    return null;
+  }
+
+  return {
+    geometry: decodePolyline(payload.route_geometry),
+    distanceKm: Math.round(((payload.route_summary?.total_distance ?? 0) / 1000) * 10) / 10,
+    durationMinutes: Math.round(payload.route_summary?.total_time ?? 0)
+  };
+}
+
+function normalizeNearbyStop(stop: NearbyStop, kind: "rail" | "bus", point: LatLng): TransportAnchor {
+  const stopPoint = {
+    lat: stop.lat ?? point.lat,
+    lng: stop.lon ?? point.lng
+  };
+  const distanceFromHomeKm =
+    Math.round(
+      Math.hypot(stopPoint.lat - point.lat, stopPoint.lng - point.lng) * 111 * 10
+    ) / 10;
+
+  return {
+    id: `${kind}-${stop.id ?? stop.name ?? "anchor"}`,
+    name: stop.name || `${kind === "rail" ? "Rail" : "Bus"} stop`,
+    kind,
+    point: stopPoint,
+    distanceFromHomeKm,
+    fallbackSuggested: false
+  };
+}
+
+export async function getNearbyTransportWithOneMap(point: LatLng, env: OneMapEnv) {
+  const railUrl = new URL(`${baseUrl(env)}/api/public/nearbysvc/getNearestMrtStops`);
+  railUrl.searchParams.set("latitude", `${point.lat}`);
+  railUrl.searchParams.set("longitude", `${point.lng}`);
+  railUrl.searchParams.set("radius_in_meters", "1000");
+
+  const busUrl = new URL(`${baseUrl(env)}/api/public/nearbysvc/getNearestBusStops`);
+  busUrl.searchParams.set("latitude", `${point.lat}`);
+  busUrl.searchParams.set("longitude", `${point.lng}`);
+  busUrl.searchParams.set("radius_in_meters", "400");
+
+  const [railResponse, busResponse] = await Promise.all([
+    fetchWithAuth(railUrl.toString(), env),
+    fetchWithAuth(busUrl.toString(), env)
+  ]);
+  const [railPayload, busPayload] = (await Promise.all([
+    railResponse.json(),
+    busResponse.json()
+  ])) as [NearbyStop[] | { error?: string }, NearbyStop[] | { error?: string }];
+
+  const rails = Array.isArray(railPayload)
+    ? railPayload.map((stop) => normalizeNearbyStop(stop, "rail", point))
+    : [];
+  const buses = Array.isArray(busPayload)
+    ? busPayload.map((stop) => normalizeNearbyStop(stop, "bus", point))
+    : [];
+
+  return {
+    rails,
+    buses
   };
 }

@@ -11,7 +11,7 @@
     "test": "vitest run",
     "check": "tsc --noEmit && vitest run",
     "worker:dev": "wrangler dev worker/index.ts --local",
-    "worker:deploy": "wrangler deploy worker/index.ts",
+    "worker:deploy": "wrangler deploy worker/index.ts --env production",
     "data:refresh": "node scripts/refresh-data.mjs"
   },
   "dependencies": {
@@ -29,6 +29,6 @@
     "typescript": "^5.7.2",
     "vite": "^5.4.10",
     "vitest": "^2.1.4",
-    "wrangler": "^4.20.0"
+    "wrangler": "^4.86.0"
   }
 }

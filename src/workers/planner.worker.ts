@@ -1,14 +1,19 @@
 import { planRoutes } from "../lib/planner.js";
-import type { PlannedRoutes, ResolvedParticipant } from "../types.js";
+import type {
+  LiveDiscoveryStatus,
+  PlannedRoutes,
+  ResolvedParticipant,
+  RouteCandidate,
+  ZoneDiscoveryStatus
+} from "../types.js";
 
 type WorkerRequest = {
-  start: {
-    label: string;
-    point: { lat: number; lng: number };
-  };
+  candidates: RouteCandidate[];
   participants: ResolvedParticipant[];
   startTimeIso: string;
   transitOverrides?: Record<string, number>;
+  zoneStatuses?: ZoneDiscoveryStatus[];
+  liveDiscoveryStatus?: LiveDiscoveryStatus;
 };
 
 type WorkerResponse = PlannedRoutes;
