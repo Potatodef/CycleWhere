@@ -19,6 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npx wrangler whoami
       - run: npx wrangler deploy worker/index.ts --env production
 
   deploy-pages:
@@ -35,4 +36,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: npx wrangler whoami
       - run: npx wrangler pages deploy dist --project-name="${{ secrets.CLOUDFLARE_PAGES_PROJECT }}"
