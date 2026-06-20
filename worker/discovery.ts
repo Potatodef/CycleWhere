@@ -249,6 +249,17 @@ export async function discoverCyclingRoutes(
 
       if (curatedCandidate) {
         curatedCandidate.routeQualityScore = routeQualityScore(curatedCandidate);
+        return {
+          candidates: [] as RouteCandidate[],
+          curatedCandidate,
+          status: {
+            zoneId: corridor.id,
+            zoneName: corridor.name,
+            status: "available",
+            usedProfile,
+            candidateCount: 1
+          } satisfies ZoneDiscoveryStatus
+        };
       }
 
       const sampled = sampleSpine(spine.geometry, spine.durationMinutes);

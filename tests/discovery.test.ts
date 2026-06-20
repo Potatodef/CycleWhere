@@ -30,8 +30,12 @@ vi.mock("../src/data/anchors.js", () => ({
 }));
 
 describe("live discovery", () => {
-  it("treats a fetched live spine as available even when no sampled waypoints survive", async () => {
+  it("skips harvested waypoint lookups when a cycling spine already yields a curated match", async () => {
     const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const getNearbyTransport = vi.fn(async () => ({
+      rails: [],
+      buses: []
+    }));
     const result = await discoverCyclingRoutes(
       {
         start: {
@@ -65,13 +69,11 @@ describe("live discovery", () => {
           distanceKm: 4.2,
           durationMinutes: 18
         }),
-        getNearbyTransport: async () => ({
-          rails: [],
-          buses: []
-        })
+        getNearbyTransport
       }
     );
 
+    expect(getNearbyTransport).not.toHaveBeenCalled();
     expect(result.curatedCandidates).toHaveLength(1);
     expect(result.zoneStatuses[0]?.status).toBe("available");
     expect(result.liveDiscoveryStatus).toBe("available");
