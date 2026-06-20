@@ -271,6 +271,20 @@ export async function discoverCyclingRoutes(
             } satisfies RouteCandidate)
           : null;
 
+      if (!curatedCandidate && localCuratedCandidate) {
+        return {
+          candidates: [] as RouteCandidate[],
+          curatedCandidate: localCuratedCandidate,
+          status: {
+            zoneId: corridor.id,
+            zoneName: corridor.name,
+            status: "available",
+            usedProfile,
+            candidateCount: 1
+          } satisfies ZoneDiscoveryStatus
+        };
+      }
+
       if (curatedCandidate) {
         curatedCandidate.routeQualityScore = routeQualityScore(curatedCandidate);
         return {

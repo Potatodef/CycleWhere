@@ -26,26 +26,65 @@ vi.mock("../src/data/corridors.js", () => ({
 }));
 
 vi.mock("../src/data/anchors.js", () => ({
-  anchorSeeds: [
+  anchorSeeds: []
+}));
+
+vi.mock("../src/lib/planner.js", () => ({
+  generateCuratedCandidates: () => [
     {
-      id: "test-anchor",
-      name: "Test MRT",
-      kind: "rail",
-      point: { lat: 1.31, lng: 103.88 }
+      id: "test-corridor-direct",
+      zoneId: "test-corridor",
+      zoneName: "Test corridor",
+      source: "curated",
+      profile: "cycling",
+      corridorId: "test-corridor",
+      corridorName: "Test corridor",
+      routeName: "Direct",
+      endpointName: "Test endpoint",
+      endpoint: { lat: 1.31, lng: 103.88 },
+      endpointAnchor: {
+        id: "local-anchor",
+        name: "Local anchor",
+        kind: "rail",
+        point: { lat: 1.31, lng: 103.88 },
+        distanceFromHomeKm: 0.1,
+        fallbackSuggested: false
+      },
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: 1.31, lng: 103.88 }
+      ],
+      distanceKm: 4.2,
+      cyclingMinutes: 18,
+      pcnCoverage: 0.7,
+      cyclingPathCoverage: 0.2,
+      commonCorridorCoverage: 0.8,
+      mixedTrafficMeters: 120,
+      popularityEvidence: [],
+      routeQualityScore: 65,
+      routeQualitySource: "inferred",
+      overlapSignature: ["a->b"]
     }
   ]
 }));
 
 describe("live discovery", () => {
-  it("falls back to the local curated corridor when the live spine request throws", async () => {
+  it("falls back to the local curated corridor when a live spine exists but cannot form a curated match", async () => {
     const { discoverCyclingRoutes } = await import("../worker/discovery.js");
     const getNearbyTransport = vi.fn(async () => ({
       rails: [],
       buses: []
     }));
-    const fetchRoute = vi.fn(async () => {
-      throw new Error("upstream failed");
-    });
+    const fetchRoute = vi.fn(async () => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: 1.29, lng: 103.86 },
+        { lat: 1.3, lng: 103.87 },
+        { lat: 1.31, lng: 103.88 }
+      ],
+      distanceKm: 4.2,
+      durationMinutes: 18
+    }));
     const result = await discoverCyclingRoutes(
       {
         start: {
