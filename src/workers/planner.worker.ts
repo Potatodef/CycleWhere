@@ -16,11 +16,23 @@ type WorkerRequest = {
   liveDiscoveryStatus?: LiveDiscoveryStatus;
 };
 
-type WorkerResponse = PlannedRoutes;
+type WorkerResponse =
+  | { ok: true; plannedRoutes: PlannedRoutes }
+  | { ok: false; error: string };
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
-  const result: WorkerResponse = planRoutes(event.data);
-  self.postMessage(result);
+  try {
+    const result = planRoutes(event.data);
+    self.postMessage({
+      ok: true,
+      plannedRoutes: result
+    } satisfies WorkerResponse);
+  } catch (error) {
+    self.postMessage({
+      ok: false,
+      error: error instanceof Error ? error.message : "Route planning failed."
+    } satisfies WorkerResponse);
+  }
 };
 
 export {};

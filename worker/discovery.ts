@@ -135,9 +135,10 @@ function pickEndpointAnchor(point: LatLng, nearby: { rails: TransportAnchor[]; b
 function zoneReason(
   profile: RoutingProfile | null,
   candidates: RouteCandidate[],
+  curatedCandidate: RouteCandidate | null,
   fallbackReason: string | undefined
 ) {
-  if (candidates.length > 0) {
+  if (candidates.length > 0 || curatedCandidate) {
     return undefined;
   }
   if (profile === "walk_discovery") {
@@ -318,16 +319,18 @@ export async function discoverCyclingRoutes(
         .slice(0, 3)
         .map((item) => item.candidate);
 
+      const hasLiveAlignedRoute = Boolean(curatedCandidate) || candidates.length > 0;
+
       return {
         candidates,
         curatedCandidate,
         status: {
           zoneId: corridor.id,
           zoneName: corridor.name,
-          status: candidates.length > 0 ? "available" : "partial",
+          status: hasLiveAlignedRoute ? "available" : "partial",
           usedProfile,
-          candidateCount: candidates.length,
-          reason: zoneReason(usedProfile, candidates, fallbackReason)
+          candidateCount: candidates.length + (curatedCandidate ? 1 : 0),
+          reason: zoneReason(usedProfile, candidates, curatedCandidate, fallbackReason)
         } satisfies ZoneDiscoveryStatus
       };
     })

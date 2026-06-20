@@ -26,7 +26,7 @@ type Bindings = {
   ONEMAP_BASE_URL?: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+export const app = new Hono<{ Bindings: Bindings }>();
 const MAX_GEOCODE_QUERIES = 12;
 const MAX_TRANSIT_QUERIES = 120;
 const MAX_PARTICIPANTS = 10;
@@ -55,7 +55,7 @@ function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string
 app.use(
   "*",
   cors({
-    origin: (origin, context) => resolveCorsOrigin(origin, context.env.CORS_ORIGIN),
+    origin: (origin, context) => resolveCorsOrigin(origin, context.env?.CORS_ORIGIN),
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type"]
   })
@@ -134,10 +134,6 @@ app.get("/api/health", (context) =>
   context.json({
     ok: true,
     service: "cyclewhere-api",
-    hasD1: Boolean(context.env.TRANSIT_CACHE),
-    hasOneMapCredentials: Boolean(
-      context.env.ONEMAP_API_EMAIL && context.env.ONEMAP_API_PASSWORD
-    ),
     timestamp: new Date().toISOString()
   })
 );

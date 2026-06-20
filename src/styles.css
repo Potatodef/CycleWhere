@@ -219,6 +219,11 @@ a {
   color: color-mix(in srgb, var(--text) 86%, white 14%);
 }
 
+.field-error {
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--uneven) 78%, var(--text) 22%);
+}
+
 input {
   width: 100%;
   padding: 13px 14px;
@@ -539,6 +544,10 @@ input:focus-visible {
     linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 88%, var(--bg-accent) 12%) 0%, var(--surface) 100%);
 }
 
+.map-loading {
+  min-height: 430px;
+}
+
 .map-fallback-copy {
   display: grid;
   gap: 8px;
@@ -764,11 +773,9 @@ input:focus-visible {
 @media (max-width: 720px) {
   .top-nav {
     align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
     padding: 12px 16px;
-  }
-
-  .top-nav-status {
-    display: none;
   }
 
   .app-shell {

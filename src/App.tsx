@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { RouteMap } from "./components/RouteMap.js";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { railStationSeeds } from "./lib/anchors.js";
 import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
 import {
@@ -10,14 +9,36 @@ import {
 } from "./lib/api.js";
 import { buildTransitQueries, generateCuratedCandidates } from "./lib/planner.js";
 import type {
+  LiveDiscoveryStatus,
+  LocationResolution,
   PlannedRoutes,
   ResolvedParticipant,
+  RouteCandidate,
   RoutePlan,
-  RouteSection
+  RouteSection,
+  ZoneDiscoveryStatus
 } from "./types.js";
 
 const worker = new Worker(new URL("./workers/planner.worker.ts", import.meta.url), {
   type: "module"
+});
+
+type WorkerRequest = {
+  candidates: RouteCandidate[];
+  participants: ResolvedParticipant[];
+  startTimeIso: string;
+  transitOverrides?: Record<string, number>;
+  zoneStatuses?: ZoneDiscoveryStatus[];
+  liveDiscoveryStatus?: LiveDiscoveryStatus;
+};
+
+type WorkerResponse =
+  | { ok: true; plannedRoutes: PlannedRoutes }
+  | { ok: false; error: string };
+
+const RouteMap = lazy(async () => {
+  const module = await import("./components/RouteMap.js");
+  return { default: module.RouteMap };
 });
 
 type ParticipantInput = {
@@ -209,6 +230,10 @@ function fallbackParticipantName(participant: { name: string }, index: number) {
   return participant.name.trim() || `Rider ${index + 1}`;
 }
 
+function hasReliableMeetupResolution(resolution: LocationResolution | null) {
+  return Boolean(resolution && resolution.confidence !== "low");
+}
+
 function getApiBase() {
   const fromImportMeta =
     (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ?? "";
@@ -368,6 +393,8 @@ export function App() {
   const [hasCustomDepartureTime, setHasCustomDepartureTime] = useState(false);
   const [showDeparturePicker, setShowDeparturePicker] = useState(false);
   const [participants, setParticipants] = useState(initialParticipants);
+  const [invalidStartQuery, setInvalidStartQuery] = useState(false);
+  const [startFieldMessage, setStartFieldMessage] = useState<string | null>(null);
   const [activeStationFieldId, setActiveStationFieldId] = useState<string | null>(null);
   const [invalidStationIds, setInvalidStationIds] = useState<string[]>([]);
   const [resolvedStart, setResolvedStart] = useState<{
@@ -383,15 +410,33 @@ export function App() {
   const [message, setMessage] = useState(
     "Pick one meetup point and each rider's MRT station, then compare route endings by how fair the ride home looks."
   );
-  const workerPromiseRef = useRef<((value: PlannedRoutes) => void) | null>(null);
+  const workerPromiseRef = useRef<{
+    resolve: (value: PlannedRoutes) => void;
+    reject: (reason?: unknown) => void;
+  } | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = "neutral-ink";
   }, []);
 
   useEffect(() => {
-    worker.onmessage = (event: MessageEvent<PlannedRoutes>) => {
-      workerPromiseRef.current?.(event.data);
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if (event.data.ok) {
+        workerPromiseRef.current?.resolve(event.data.plannedRoutes);
+      } else {
+        workerPromiseRef.current?.reject(new Error(event.data.error));
+      }
+      workerPromiseRef.current = null;
+    };
+
+    worker.onerror = () => {
+      workerPromiseRef.current?.reject(new Error("Route planning failed before results were ready."));
+      workerPromiseRef.current = null;
+    };
+
+    worker.onmessageerror = () => {
+      workerPromiseRef.current?.reject(new Error("Route planning returned an unreadable result."));
+      workerPromiseRef.current = null;
     };
   }, []);
 
@@ -447,6 +492,7 @@ export function App() {
     return allRoutes.find((route) => route.id === selectedRouteId) ?? allRoutes[0] ?? null;
   }, [allRoutes, selectedRouteId]);
 
+  const hasPreviewMapData = Boolean(resolvedStart || previewParticipants.length > 0 || selectedRoute);
   const allRouteCount = allRoutes.length;
   const googleMapsRouteUrl =
     resolvedStart && selectedRoute ? buildGoogleMapsRouteUrl(resolvedStart.point, selectedRoute) : null;
@@ -505,8 +551,7 @@ export function App() {
     clearResolvedState();
   }
 
-  async function resolveInputs() {
-    const [start] = await geocodeQueries([startQuery]);
+  async function resolveInputs(start: LocationResolution) {
     const people = await resolveParticipants(
       participants.map((participant, index) => ({
         id: participant.id,
@@ -529,30 +574,44 @@ export function App() {
   }
 
   async function handlePlan() {
+    const trimmedStartQuery = startQuery.trim();
+    const [startResolution] = trimmedStartQuery ? await geocodeQueries([trimmedStartQuery]) : [null];
     const unresolvedStations = participants
       .filter((participant) => !findExactStation(participant.station))
       .map((participant) => participant.id);
+    const hasInvalidMeetup = !trimmedStartQuery || !hasReliableMeetupResolution(startResolution);
 
-    if (unresolvedStations.length > 0) {
-      setInvalidStationIds(unresolvedStations);
+    setInvalidStartQuery(hasInvalidMeetup);
+    setStartFieldMessage(
+      hasInvalidMeetup ? "Use a real meetup point that resolves to an actual place in Singapore." : null
+    );
+    setInvalidStationIds(unresolvedStations);
+
+    if (hasInvalidMeetup || unresolvedStations.length > 0) {
       setActiveStationFieldId(unresolvedStations[0] ?? null);
-      setMessage("Pick a valid MRT/LRT station for every rider before planning any routes.");
+      setMessage(
+        hasInvalidMeetup && unresolvedStations.length > 0
+          ? "Fix the meetup point and every rider's MRT/LRT station before planning."
+          : hasInvalidMeetup
+            ? "Fix the meetup point before planning any routes."
+            : "Pick a valid MRT/LRT station for every rider before planning any routes."
+      );
       return;
     }
 
-    setInvalidStationIds([]);
     setStatus("planning");
     setMessage("Comparing curated and discovered routes by fairness first, then route confidence and distance variety.");
 
-    const plannedRoutes = await new Promise<PlannedRoutes>((resolve) => {
+    try {
+      const plannedRoutes = await new Promise<PlannedRoutes>((resolve, reject) => {
       const prepareResolved =
         resolvedStart && resolvedParticipants.length === participants.length
           ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
-          : resolveInputs();
+          : resolveInputs(startResolution!);
 
       const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
 
-      workerPromiseRef.current = resolve;
+        workerPromiseRef.current = { resolve, reject };
 
       const runPlanning = async () => {
         const resolved = await prepareResolved;
@@ -596,23 +655,34 @@ export function App() {
           transitOverrides,
           zoneStatuses: discovered.zoneStatuses,
           liveDiscoveryStatus: discovered.liveDiscoveryStatus
-        });
+        } satisfies WorkerRequest);
       };
 
-      void runPlanning();
-    });
+        void runPlanning().catch((error) => {
+          workerPromiseRef.current = null;
+          reject(error);
+        });
+      });
 
-    setResults(plannedRoutes);
-    setSelectedRouteId(plannedRoutes.sections[0]?.routes[0]?.id ?? null);
-    setExpandedRouteIds([]);
-    setStatus("idle");
-    setMessage(
-      plannedRoutes.liveDiscoveryStatus === "available"
-        ? "Hybrid results ready. Compare the cleaner corridor matches against live route discoveries."
-        : plannedRoutes.liveDiscoveryStatus === "partial"
-          ? "Partial live discovery. Curated routes remain available while some live zone lookups were unavailable."
-          : "Live discovery unavailable. Showing curated corridor routes with fallback estimates where needed."
-    );
+      setResults(plannedRoutes);
+      setSelectedRouteId(plannedRoutes.sections[0]?.routes[0]?.id ?? null);
+      setExpandedRouteIds([]);
+      setStatus("idle");
+      setMessage(
+        plannedRoutes.liveDiscoveryStatus === "available"
+          ? "Hybrid results ready. Compare the cleaner corridor matches against live route discoveries."
+          : plannedRoutes.liveDiscoveryStatus === "partial"
+            ? "Partial live discovery. Curated routes remain available while some live zone lookups were unavailable."
+            : "Live discovery unavailable. Showing curated corridor routes with fallback estimates where needed."
+      );
+    } catch {
+      workerPromiseRef.current = null;
+      setStatus("idle");
+      setResults(null);
+      setSelectedRouteId(null);
+      setExpandedRouteIds([]);
+      setMessage("Route planning hit an unexpected error. Try the same inputs again.");
+    }
   }
 
   function loadExample() {
@@ -621,6 +691,8 @@ export function App() {
     setHasCustomDepartureTime(false);
     setShowDeparturePicker(false);
     setParticipants(exampleParticipants.map((participant) => ({ ...participant })));
+    setInvalidStartQuery(false);
+    setStartFieldMessage(null);
     setActiveStationFieldId(null);
     setInvalidStationIds([]);
     clearResolvedState();
@@ -698,13 +770,18 @@ export function App() {
               <label className="field">
                 <span>Meetup point</span>
                 <input
+                  className={invalidStartQuery ? "invalid-input" : undefined}
+                  aria-invalid={invalidStartQuery}
                   value={startQuery}
                   onChange={(event) => {
+                    setInvalidStartQuery(false);
+                    setStartFieldMessage(null);
                     setStartQuery(event.target.value);
                     clearResolvedState();
                   }}
                   placeholder="Marina Bay MRT"
                 />
+                {startFieldMessage ? <span className="field-error">{startFieldMessage}</span> : null}
               </label>
               <div className="start-card-foot">
                 <span className="time-chip">Used for every route option</span>
@@ -834,6 +911,9 @@ export function App() {
                             }}
                             placeholder="Bedok MRT"
                           />
+                          {invalidStationIds.includes(participant.id) ? (
+                            <span className="field-error">Pick one MRT/LRT station from the suggested list.</span>
+                          ) : null}
                           {activeStationFieldId === participant.id ? (
                             <div className="station-suggestions" role="listbox" aria-label={`Suggested stations for rider ${index + 1}`}>
                               {getStationRecommendations(participant.station).map((stationName) => (
@@ -896,15 +976,38 @@ export function App() {
               description="The start and finish markers stand apart. Each rider marker uses the same color as that rider&apos;s input card."
             />
 
-            <RouteMap
-              start={resolvedStart}
-              participants={previewParticipants}
-              participantMarkerColors={Object.fromEntries(
-                Object.entries(participantStyles).map(([id, value]) => [id, value.accentStrong])
-              )}
-              selectedRoute={selectedRoute}
-              mapStyle="osm-bright"
-            />
+            {hasPreviewMapData ? (
+              <Suspense
+                fallback={
+                  <div className="map-shell map-fallback map-loading" aria-label="Route preview loading">
+                    <div className="map-fallback-copy">
+                      <strong>Loading route preview</strong>
+                      <span>The route cards are ready. The map will follow in a moment.</span>
+                    </div>
+                  </div>
+                }
+              >
+                <RouteMap
+                  start={resolvedStart}
+                  participants={previewParticipants}
+                  participantMarkerColors={Object.fromEntries(
+                    Object.entries(participantStyles).map(([id, value]) => [id, value.accentStrong])
+                  )}
+                  selectedRoute={selectedRoute}
+                  mapStyle="osm-bright"
+                />
+              </Suspense>
+            ) : (
+              <div className="map-shell map-fallback" aria-label="Route preview waiting">
+                <div className="map-fallback-copy">
+                  <strong>Map preview appears after you plan</strong>
+                  <span>
+                    Pick the meetup point and riders first, then the route preview loads with the
+                    selected option.
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div className="map-caption">
               <span>

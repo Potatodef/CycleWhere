@@ -1,4 +1,5 @@
 import { findRailStation, railStationSeeds } from "../src/lib/anchors.js";
+import { fallbackResolve } from "../src/lib/geocodeFallback.js";
 
 describe("rail station seeds", () => {
   it("covers the operational MRT and LRT network", () => {
@@ -9,5 +10,9 @@ describe("rail station seeds", () => {
     expect(findRailStation("Bukit Panjang")?.name).toBe("Bukit Panjang MRT/LRT");
     expect(findRailStation("Damai")?.name).toBe("Damai LRT");
     expect(findRailStation("Choa Chu Kang MRT")?.name).toBe("Choa Chu Kang MRT/LRT");
+  });
+
+  it("treats nonsense meetup inputs as low-confidence fallbacks", () => {
+    expect(fallbackResolve("NotARealPlaceZXQ123").confidence).toBe("low");
   });
 });

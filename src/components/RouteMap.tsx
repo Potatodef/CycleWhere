@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { type StyleSpecification } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 import type { RoutePlan, ResolvedParticipant } from "../types.js";
 
 export type MapStyleId = "osm-bright" | "alidade-smooth" | "classic-osm";
