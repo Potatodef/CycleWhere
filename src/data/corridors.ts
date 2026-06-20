@@ -46,7 +46,7 @@ export const corridorSeeds: CorridorSeed[] = [
     name: "North Eastern Riverine Loop",
     endpointName: "Punggol Waterway",
     endpoint: { lat: 1.4069, lng: 103.9064 },
-    preferredAnchorId: "punggol-mrt",
+    preferredAnchorId: "punggol-mrt-lrt",
     basePcnCoverage: 0.8,
     baseCyclingPathCoverage: 0.12,
     baseCommonCorridorCoverage: 0.66,
