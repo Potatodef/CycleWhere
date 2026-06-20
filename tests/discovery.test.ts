@@ -13,7 +13,14 @@ vi.mock("../src/data/corridors.js", () => ({
       baseCommonCorridorCoverage: 0.8,
       baseMixedTrafficMeters: 120,
       evidence: [],
-      detours: []
+      detours: [
+        {
+          id: "direct",
+          name: "Direct",
+          distanceMultiplier: 1,
+          controlPoints: []
+        }
+      ]
     }
   ]
 }));
@@ -30,12 +37,15 @@ vi.mock("../src/data/anchors.js", () => ({
 }));
 
 describe("live discovery", () => {
-  it("skips harvested waypoint lookups when a cycling spine already yields a curated match", async () => {
+  it("falls back to the local curated corridor when the live spine request throws", async () => {
     const { discoverCyclingRoutes } = await import("../worker/discovery.js");
     const getNearbyTransport = vi.fn(async () => ({
       rails: [],
       buses: []
     }));
+    const fetchRoute = vi.fn(async () => {
+      throw new Error("upstream failed");
+    });
     const result = await discoverCyclingRoutes(
       {
         start: {
@@ -59,20 +69,12 @@ describe("live discovery", () => {
         ]
       },
       {
-        fetchRoute: async () => ({
-          geometry: [
-            { lat: 1.2808, lng: 103.8545 },
-            { lat: 1.29, lng: 103.86 },
-            { lat: 1.3, lng: 103.87 },
-            { lat: 1.31, lng: 103.88 }
-          ],
-          distanceKm: 4.2,
-          durationMinutes: 18
-        }),
+        fetchRoute,
         getNearbyTransport
       }
     );
 
+    expect(fetchRoute).toHaveBeenCalledTimes(1);
     expect(getNearbyTransport).not.toHaveBeenCalled();
     expect(result.curatedCandidates).toHaveLength(1);
     expect(result.zoneStatuses[0]?.status).toBe("available");

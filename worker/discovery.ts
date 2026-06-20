@@ -2,6 +2,7 @@ import { corridorSeeds } from "../src/data/corridors.js";
 import { anchorSeeds } from "../src/data/anchors.js";
 import { resolveTransportAnchor } from "../src/lib/anchors.js";
 import { haversineKm } from "../src/lib/geo.js";
+import { generateCuratedCandidates } from "../src/lib/planner.js";
 import type {
   DiscoverRoutesRequest,
   DiscoveredRoutesResponse,
@@ -170,27 +171,50 @@ export async function discoverCyclingRoutes(
 ): Promise<DiscoveredRoutesResponse> {
   const groupCentroid = averagePoint(request.participants.map((participant) => participant.station));
   const curatedCandidates: RouteCandidate[] = [];
+  const localCuratedCandidates = generateCuratedCandidates(request.start);
 
   const zoneResults = await Promise.allSettled(
     corridorSeeds.map(async (corridor) => {
       let usedProfile: RoutingProfile | null = "cycling";
       let fallbackReason: string | undefined;
+      const localCuratedCandidate =
+        localCuratedCandidates.find((candidate) => candidate.id === `${corridor.id}-direct`) ??
+        localCuratedCandidates.find((candidate) => candidate.corridorId === corridor.id) ??
+        null;
 
-      const primarySpine = await deps.fetchRoute({
-        start: request.start.point,
-        end: corridor.endpoint,
-        profile: "cycling"
-      });
+      const primarySpine = await deps
+        .fetchRoute({
+          start: request.start.point,
+          end: corridor.endpoint,
+          profile: "cycling"
+        })
+        .catch(() => null);
 
       let spine = primarySpine;
       if (!spine) {
+        if (localCuratedCandidate) {
+          return {
+            candidates: [] as RouteCandidate[],
+            curatedCandidate: localCuratedCandidate,
+            status: {
+              zoneId: corridor.id,
+              zoneName: corridor.name,
+              status: "available",
+              usedProfile,
+              candidateCount: 1
+            } satisfies ZoneDiscoveryStatus
+          };
+        }
+
         usedProfile = "walk_discovery";
         const backupAnchor = resolveTransportAnchor(corridor.endpoint);
-        spine = await deps.fetchRoute({
-          start: request.start.point,
-          end: backupAnchor.point,
-          profile: "walk_discovery"
-        });
+        spine = await deps
+          .fetchRoute({
+            start: request.start.point,
+            end: backupAnchor.point,
+            profile: "walk_discovery"
+          })
+          .catch(() => null);
         if (!spine) {
           fallbackReason = "No live route spine could be fetched for this zone.";
         }
@@ -277,11 +301,13 @@ export async function discoverCyclingRoutes(
           let fromWalkingSpine = usedProfile === "walk_discovery";
 
           if (usedProfile === "walk_discovery") {
-            const cyclingRoute = await deps.fetchRoute({
-              start: request.start.point,
-              end: sample.point,
-              profile: "cycling"
-            });
+            const cyclingRoute = await deps
+              .fetchRoute({
+                start: request.start.point,
+                end: sample.point,
+                profile: "cycling"
+              })
+              .catch(() => null);
 
             if (!cyclingRoute) {
               return null;
