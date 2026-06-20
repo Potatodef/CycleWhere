@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { RouteMap } from "./components/RouteMap.js";
+import { railStationSeeds } from "./lib/anchors.js";
 import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
 import {
   discoverCyclingRoutes,
@@ -12,36 +13,152 @@ import type {
   PlannedRoutes,
   ResolvedParticipant,
   RoutePlan,
-  RouteSection,
-  ThemeId
+  RouteSection
 } from "./types.js";
 
 const worker = new Worker(new URL("./workers/planner.worker.ts", import.meta.url), {
   type: "module"
 });
 
-const themeOptions: Array<{ id: ThemeId; label: string; description: string }> = [
-  { id: "neutral-ink", label: "Neutral Ink", description: "Paper, charcoal, and a calm civic feel." },
-  { id: "forest", label: "Forest", description: "Greener and outdoorsy without getting loud." },
-  { id: "warm-clay", label: "Warm Clay", description: "Warmer surfaces for lighter A/B testing." }
+type ParticipantInput = {
+  id: string;
+  name: string;
+  station: string;
+  colorIndex: number;
+};
+
+const participantPalette = [
+  {
+    accent: "oklch(48% 0.14 158)",
+    accentStrong: "oklch(42% 0.16 158)",
+    surface: "oklch(97% 0.010 158)",
+    border: "oklch(89% 0.018 158)"
+  },
+  {
+    accent: "oklch(55% 0.12 280)",
+    accentStrong: "oklch(47% 0.14 280)",
+    surface: "oklch(97% 0.008 280)",
+    border: "oklch(89% 0.014 280)"
+  },
+  {
+    accent: "oklch(58% 0.11 55)",
+    accentStrong: "oklch(50% 0.13 55)",
+    surface: "oklch(97% 0.008 55)",
+    border: "oklch(90% 0.014 55)"
+  },
+  {
+    accent: "oklch(60% 0.12 110)",
+    accentStrong: "oklch(49% 0.14 110)",
+    surface: "oklch(97% 0.008 110)",
+    border: "oklch(90% 0.014 110)"
+  },
+  {
+    accent: "oklch(56% 0.14 15)",
+    accentStrong: "oklch(46% 0.16 15)",
+    surface: "oklch(97% 0.008 15)",
+    border: "oklch(90% 0.014 15)"
+  },
+  {
+    accent: "oklch(53% 0.12 230)",
+    accentStrong: "oklch(44% 0.15 230)",
+    surface: "oklch(97% 0.008 230)",
+    border: "oklch(89% 0.014 230)"
+  },
+  {
+    accent: "oklch(62% 0.11 345)",
+    accentStrong: "oklch(52% 0.13 345)",
+    surface: "oklch(97% 0.008 345)",
+    border: "oklch(90% 0.014 345)"
+  },
+  {
+    accent: "oklch(63% 0.13 200)",
+    accentStrong: "oklch(51% 0.15 200)",
+    surface: "oklch(97% 0.008 200)",
+    border: "oklch(89% 0.014 200)"
+  },
+  {
+    accent: "oklch(62% 0.10 85)",
+    accentStrong: "oklch(52% 0.12 85)",
+    surface: "oklch(97% 0.008 85)",
+    border: "oklch(90% 0.014 85)"
+  },
+  {
+    accent: "oklch(57% 0.09 25)",
+    accentStrong: "oklch(48% 0.11 25)",
+    surface: "oklch(97% 0.008 25)",
+    border: "oklch(90% 0.014 25)"
+  }
 ];
 
-const avatarColors = [
-  { avatar: "oklch(48% 0.14 158)", rowBg: "oklch(97% 0.006 158)", border: "oklch(92% 0.012 158)" },
-  { avatar: "oklch(52% 0.12 55)", rowBg: "oklch(97% 0.008 55)", border: "oklch(92% 0.015 55)" },
-  { avatar: "oklch(50% 0.12 280)", rowBg: "oklch(97% 0.006 280)", border: "oklch(92% 0.012 280)" },
-  { avatar: "oklch(55% 0.12 85)", rowBg: "oklch(97% 0.008 85)", border: "oklch(92% 0.015 85)" }
+const exampleParticipants: ParticipantInput[] = [
+  { id: "1", name: "Ariel", station: "Bedok MRT", colorIndex: 0 },
+  { id: "2", name: "Ben", station: "Tampines MRT", colorIndex: 1 },
+  { id: "3", name: "Charis", station: "Paya Lebar MRT", colorIndex: 2 },
+  { id: "4", name: "Deepa", station: "Punggol MRT", colorIndex: 3 }
 ];
 
-const exampleHomes = [
-  { id: "1", name: "Ariel", address: "Bedok Reservoir" },
-  { id: "2", name: "Ben", address: "Tampines Central" },
-  { id: "3", name: "Charis", address: "Marine Parade" },
-  { id: "4", name: "Deepa", address: "Punggol Waterway" }
+const initialParticipants: ParticipantInput[] = [
+  { id: "starter-1", name: "", station: "", colorIndex: 0 },
+  { id: "starter-2", name: "", station: "", colorIndex: 1 }
 ];
+
+const stationSuggestions = railStationSeeds.map((station) => station.name);
+
+function normalizeStationQuery(query: string) {
+  return query
+    .toLowerCase()
+    .replace(/[()/]/g, " ")
+    .replace(/\b(?:mrt|lrt|station)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findExactStation(query: string) {
+  const normalized = normalizeStationQuery(query);
+  if (!normalized) {
+    return null;
+  }
+
+  return railStationSeeds.find((station) => normalizeStationQuery(station.name) === normalized) ?? null;
+}
+
+function getStationRecommendations(query: string) {
+  const normalized = normalizeStationQuery(query);
+  if (!normalized) {
+    return stationSuggestions.slice(0, 8);
+  }
+
+  const ranked = railStationSeeds
+    .map((station) => {
+      const stationName = normalizeStationQuery(station.name);
+      const startsWith = stationName.startsWith(normalized);
+      const includes = stationName.includes(normalized);
+
+      if (!startsWith && !includes) {
+        return null;
+      }
+
+      return {
+        name: station.name,
+        score: startsWith ? 0 : stationName.indexOf(normalized) + 1
+      };
+    })
+    .filter((item): item is { name: string; score: number } => Boolean(item))
+    .sort((left, right) => left.score - right.score || left.name.localeCompare(right.name));
+
+  return ranked.slice(0, 8).map((item) => item.name);
+}
 
 function formatCoverage(value?: number) {
   return value === undefined ? "n/a" : `${Math.round(value * 100)}%`;
+}
+
+function hasCoverageDetails(route: RoutePlan) {
+  return (
+    route.pcnCoverage !== undefined ||
+    route.cyclingPathCoverage !== undefined ||
+    route.commonCorridorCoverage !== undefined
+  );
 }
 
 function formatMinutes(value: number) {
@@ -53,6 +170,45 @@ function formatMinutes(value: number) {
   return `${hours}h ${minutes}m`;
 }
 
+function formatDepartureSummary(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-SG", {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(parsed);
+}
+
+function buildGoogleMapsRouteUrl(
+  start: { lat: number; lng: number },
+  route: RoutePlan
+) {
+  const url = new URL("https://www.google.com/maps/dir/");
+  url.searchParams.set("api", "1");
+  url.searchParams.set("origin", `${start.lat},${start.lng}`);
+  url.searchParams.set("destination", `${route.endpoint.lat},${route.endpoint.lng}`);
+  url.searchParams.set("travelmode", "bicycling");
+  return url.toString();
+}
+
+function nextColorIndex(participants: ParticipantInput[]) {
+  const used = new Set(participants.map((participant) => participant.colorIndex));
+  for (let index = 0; index < participantPalette.length; index += 1) {
+    if (!used.has(index)) {
+      return index;
+    }
+  }
+
+  return participants.length % participantPalette.length;
+}
+
+function fallbackParticipantName(participant: { name: string }, index: number) {
+  return participant.name.trim() || `Rider ${index + 1}`;
+}
+
 function getApiBase() {
   const fromImportMeta =
     (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ?? "";
@@ -61,14 +217,6 @@ function getApiBase() {
   }).__CYCLEWHERE_CONFIG__?.apiBase;
 
   return fromImportMeta || fromWindow || "";
-}
-
-function themeFromStorage(): ThemeId {
-  const stored = localStorage.getItem("cyclewhere-theme");
-  if (stored === "neutral-ink" || stored === "forest" || stored === "warm-clay") {
-    return stored;
-  }
-  return "neutral-ink";
 }
 
 function routeBadgeClass(route: RoutePlan) {
@@ -84,21 +232,8 @@ function routeBadgeClass(route: RoutePlan) {
   }
 }
 
-function routeConfidenceLabel(route: RoutePlan) {
-  switch (route.confidence) {
-    case "validated":
-      return "Validated by known corridor";
-    case "aligned":
-      return "Close to known corridor";
-    case "novel":
-      return "New discovered route";
-    default:
-      return "Curated heuristic route";
-  }
-}
-
-function routeSourceLabel(route: RoutePlan) {
-  return route.source === "discovered" ? "Live discovery" : "Curated corridor";
+function routeDirectionLabel(route: RoutePlan, startLabel?: string) {
+  return startLabel ? `${startLabel} to ${route.endpointName}` : route.endpointName;
 }
 
 function AppSectionLabel({
@@ -121,6 +256,7 @@ function AppSectionLabel({
 
 function RouteCard({
   route,
+  startLabel,
   bestFairnessRouteId,
   selectedRouteId,
   expanded,
@@ -128,6 +264,7 @@ function RouteCard({
   onToggleDetails
 }: {
   route: RoutePlan;
+  startLabel?: string;
   bestFairnessRouteId?: string;
   selectedRouteId: string | null;
   expanded: boolean;
@@ -136,7 +273,6 @@ function RouteCard({
 }) {
   return (
     <article
-      key={route.id}
       className={`route-card ${selectedRouteId === route.id ? "selected" : ""}`}
       onClick={() => onSelect(route.id)}
       onKeyDown={(event) => {
@@ -150,15 +286,11 @@ function RouteCard({
       <div className="route-card-head">
         <div>
           <div className="route-title-row">
-            <h3>{route.corridorName || route.zoneName}</h3>
+            <h3>{route.endpointName}</h3>
             <span className={routeBadgeClass(route)}>{route.fairnessTier}</span>
           </div>
-          <p>
-            {route.routeName} to {route.endpointName}
-          </p>
+          <p>{routeDirectionLabel(route, startLabel)}</p>
           <div className="chip-row">
-            <span className="chip">{routeSourceLabel(route)}</span>
-            <span className="chip">{routeConfidenceLabel(route)}</span>
             {bestFairnessRouteId === route.id ? <span className="chip">Best fairness in section</span> : null}
           </div>
         </div>
@@ -170,7 +302,7 @@ function RouteCard({
 
       <div className="metric-grid">
         <div>
-          <span>Average home time</span>
+          <span>Average ride home</span>
           <strong>{formatMinutes(route.averageJourneyHomeMinutes)}</strong>
         </div>
         <div>
@@ -187,11 +319,17 @@ function RouteCard({
         </div>
       </div>
 
-      <div className="chip-row">
-        <span className="chip">PCN {formatCoverage(route.pcnCoverage)}</span>
-        <span className="chip">Cycling path {formatCoverage(route.cyclingPathCoverage)}</span>
-        <span className="chip">Common corridor {formatCoverage(route.commonCorridorCoverage)}</span>
-      </div>
+      {hasCoverageDetails(route) ? (
+        <div className="chip-row">
+          {route.pcnCoverage !== undefined ? <span className="chip">PCN {formatCoverage(route.pcnCoverage)}</span> : null}
+          {route.cyclingPathCoverage !== undefined ? (
+            <span className="chip">Cycling path {formatCoverage(route.cyclingPathCoverage)}</span>
+          ) : null}
+          {route.commonCorridorCoverage !== undefined ? (
+            <span className="chip">Common corridor {formatCoverage(route.commonCorridorCoverage)}</span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="route-details" onClick={(event) => event.stopPropagation()}>
         <button
@@ -202,15 +340,8 @@ function RouteCard({
             event.stopPropagation();
             onToggleDetails(route.id);
           }}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              onToggleDetails(route.id);
-            }
-          }}
         >
-          {expanded ? "Hide participant times and evidence" : "Show participant times and evidence"}
+          {expanded ? "Hide rider breakdown" : "Show rider breakdown"}
         </button>
         {expanded ? (
           <>
@@ -218,27 +349,12 @@ function RouteCard({
               {route.participantTimes.map((participantTime) => (
                 <div key={participantTime.participantId} className="participant-time-row">
                   <span>
-                    {participantTime.participantName} via {participantTime.anchorName}
+                    {participantTime.participantName} via {participantTime.stationName}
                   </span>
                   <strong>{formatMinutes(participantTime.transitMinutes)}</strong>
                 </div>
               ))}
             </div>
-            {route.popularityEvidence?.length ? (
-              <div className="details-block">
-                {route.popularityEvidence.map((evidence) => (
-                  <a
-                    key={evidence.url}
-                    href={evidence.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    {evidence.label} · reviewed {evidence.reviewedOn}
-                  </a>
-                ))}
-              </div>
-            ) : null}
           </>
         ) : null}
       </div>
@@ -247,10 +363,13 @@ function RouteCard({
 }
 
 export function App() {
-  const [theme, setTheme] = useState<ThemeId>(themeFromStorage);
   const [startQuery, setStartQuery] = useState("Marina Bay");
-  const [startTime, setStartTime] = useState(formatIsoLocal(roundToFiveMinutes()));
-  const [participants, setParticipants] = useState(exampleHomes);
+  const [scheduledStartTime, setScheduledStartTime] = useState(formatIsoLocal(roundToFiveMinutes()));
+  const [hasCustomDepartureTime, setHasCustomDepartureTime] = useState(false);
+  const [showDeparturePicker, setShowDeparturePicker] = useState(false);
+  const [participants, setParticipants] = useState(initialParticipants);
+  const [activeStationFieldId, setActiveStationFieldId] = useState<string | null>(null);
+  const [invalidStationIds, setInvalidStationIds] = useState<string[]>([]);
   const [resolvedStart, setResolvedStart] = useState<{
     label: string;
     point: { lat: number; lng: number };
@@ -260,16 +379,15 @@ export function App() {
   const [results, setResults] = useState<PlannedRoutes | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [expandedRouteIds, setExpandedRouteIds] = useState<string[]>([]);
-  const [status, setStatus] = useState<"idle" | "resolving" | "planning">("idle");
+  const [status, setStatus] = useState<"idle" | "planning">("idle");
   const [message, setMessage] = useState(
-    "Resolve the start point and homes first so everyone can confirm the transport anchors before route planning."
+    "Pick one meetup point and each rider's MRT station, then compare route endings by how fair the ride home looks."
   );
   const workerPromiseRef = useRef<((value: PlannedRoutes) => void) | null>(null);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem("cyclewhere-theme", theme);
-  }, [theme]);
+    document.documentElement.dataset.theme = "neutral-ink";
+  }, []);
 
   useEffect(() => {
     worker.onmessage = (event: MessageEvent<PlannedRoutes>) => {
@@ -277,28 +395,86 @@ export function App() {
     };
   }, []);
 
+  const participantStyles = useMemo(
+    () =>
+      Object.fromEntries(
+        participants.map((participant) => [participant.id, participantPalette[participant.colorIndex]])
+      ),
+    [participants]
+  );
+
   const allRoutes = useMemo(
     () => results?.sections.flatMap((section) => section.routes) ?? [],
     [results]
   );
+
+  const previewParticipants = useMemo(
+    () =>
+      participants.flatMap((participant) => {
+        const station = findExactStation(participant.station);
+        if (!station) {
+          return [];
+        }
+
+        return [
+          {
+            ...participant,
+            stationResolution: {
+              query: participant.station,
+              label: station.name,
+              point: station.point,
+              confidence: "high" as const,
+              source: "fallback" as const
+            },
+            anchor: {
+              id: station.id,
+              name: station.name,
+              kind: "rail" as const,
+              point: station.point,
+              distanceFromHomeKm: 0,
+              fallbackSuggested: false
+            }
+          } satisfies ResolvedParticipant
+        ];
+      }),
+    [participants]
+  );
+
   const selectedRoute = useMemo(() => {
     if (!selectedRouteId) {
       return allRoutes[0] ?? null;
     }
     return allRoutes.find((route) => route.id === selectedRouteId) ?? allRoutes[0] ?? null;
   }, [allRoutes, selectedRouteId]);
-  const allRouteCount = allRoutes.length;
 
-  function updateParticipant(
-    id: string,
-    key: "name" | "address",
-    value: string
-  ) {
+  const allRouteCount = allRoutes.length;
+  const googleMapsRouteUrl =
+    resolvedStart && selectedRoute ? buildGoogleMapsRouteUrl(resolvedStart.point, selectedRoute) : null;
+
+  function clearResolvedState() {
+    setResolvedStart(null);
+    setResolvedParticipants([]);
+    setResults(null);
+    setSelectedRouteId(null);
+    setExpandedRouteIds([]);
+  }
+
+  function resetDepartureTime() {
+    setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
+    setHasCustomDepartureTime(false);
+    setShowDeparturePicker(false);
+  }
+
+  function updateParticipant(id: string, key: "name" | "station", value: string) {
+    if (key === "station") {
+      setInvalidStationIds((current) => current.filter((currentId) => currentId !== id));
+    }
     setParticipants((current) =>
       current.map((participant) =>
         participant.id === id ? { ...participant, [key]: value } : participant
       )
     );
+    clearResolvedState();
   }
 
   function addParticipant() {
@@ -306,8 +482,17 @@ export function App() {
       if (current.length >= 10) {
         return current;
       }
-      return [...current, { id: crypto.randomUUID(), name: "", address: "" }];
+      return [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          name: "",
+          station: "",
+          colorIndex: nextColorIndex(current)
+        }
+      ];
     });
+    clearResolvedState();
   }
 
   function removeParticipant(id: string) {
@@ -317,63 +502,79 @@ export function App() {
       }
       return current.filter((participant) => participant.id !== id);
     });
+    clearResolvedState();
   }
 
-  async function handleResolve() {
-    setStatus("resolving");
-    setResults(null);
-    setSelectedRouteId(null);
-    setExpandedRouteIds([]);
-
-    try {
-      const [start] = await geocodeQueries([startQuery]);
-      const people = await resolveParticipants(participants);
-      setResolvedStart({
+  async function resolveInputs() {
+    const [start] = await geocodeQueries([startQuery]);
+    const people = await resolveParticipants(
+      participants.map((participant, index) => ({
+        id: participant.id,
+        name: fallbackParticipantName(participant, index),
+        station: participant.station
+      }))
+    );
+    const resolved = {
+      start: {
         label: start.label,
         point: start.point,
         source: start.source
-      });
-      setResolvedParticipants(people);
-      setMessage(
-        "Anchors resolved. Check the MRT or bus fallbacks below, then plan routes when the transport assumptions look right."
-      );
-    } finally {
-      setStatus("idle");
-    }
+      },
+      participants: people
+    };
+
+    setResolvedStart(resolved.start);
+    setResolvedParticipants(resolved.participants);
+    return resolved;
   }
 
   async function handlePlan() {
-    if (!resolvedStart || resolvedParticipants.length !== participants.length) {
-      await handleResolve();
+    const unresolvedStations = participants
+      .filter((participant) => !findExactStation(participant.station))
+      .map((participant) => participant.id);
+
+    if (unresolvedStations.length > 0) {
+      setInvalidStationIds(unresolvedStations);
+      setActiveStationFieldId(unresolvedStations[0] ?? null);
+      setMessage("Pick a valid MRT/LRT station for every rider before planning any routes.");
       return;
     }
 
+    setInvalidStationIds([]);
     setStatus("planning");
-    setMessage(
-      "Scoring curated and discovered route candidates by fairness first, then corridor confidence and distance variety."
-    );
+    setMessage("Comparing curated and discovered routes by fairness first, then route confidence and distance variety.");
 
     const plannedRoutes = await new Promise<PlannedRoutes>((resolve) => {
-      const planningStartIso = new Date(startTime).toISOString();
-      const curatedCandidates = generateCuratedCandidates(resolvedStart);
+      const prepareResolved =
+        resolvedStart && resolvedParticipants.length === participants.length
+          ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
+          : resolveInputs();
+
+      const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
 
       workerPromiseRef.current = resolve;
 
       const runPlanning = async () => {
+        const resolved = await prepareResolved;
+        const planningStartIso = new Date(startMoment).toISOString();
         const discovered = await discoverCyclingRoutes({
-          start: resolvedStart,
-          participants: resolvedParticipants.map((participant) => ({
+          start: resolved.start,
+          participants: resolved.participants.map((participant) => ({
             id: participant.id,
             name: participant.name,
-            home: participant.home.point,
+            station: participant.stationResolution.point,
             anchor: participant.anchor
           }))
         });
+        const curatedCandidates =
+          (discovered.curatedCandidates?.length ?? 0) > 0
+            ? discovered.curatedCandidates
+            : generateCuratedCandidates(resolved.start);
 
         const candidates = [...curatedCandidates, ...discovered.candidates];
         const transitQueryBundle = buildTransitQueries({
           candidates,
-          participants: resolvedParticipants,
+          participants: resolved.participants,
           startTimeIso: planningStartIso
         });
         const transitOverrides: Record<string, number> = {};
@@ -390,7 +591,7 @@ export function App() {
 
         worker.postMessage({
           candidates,
-          participants: resolvedParticipants,
+          participants: resolved.participants,
           startTimeIso: planningStartIso,
           transitOverrides,
           zoneStatuses: discovered.zoneStatuses,
@@ -407,7 +608,7 @@ export function App() {
     setStatus("idle");
     setMessage(
       plannedRoutes.liveDiscoveryStatus === "available"
-        ? "Hybrid results ready. Trusted corridor matches and newly discovered routes are grouped separately."
+        ? "Hybrid results ready. Compare the cleaner corridor matches against live route discoveries."
         : plannedRoutes.liveDiscoveryStatus === "partial"
           ? "Partial live discovery. Curated routes remain available while some live zone lookups were unavailable."
           : "Live discovery unavailable. Showing curated corridor routes with fallback estimates where needed."
@@ -416,13 +617,14 @@ export function App() {
 
   function loadExample() {
     setStartQuery("Marina Bay");
-    setParticipants(exampleHomes);
-    setResolvedStart(null);
-    setResolvedParticipants([]);
-    setResults(null);
-    setSelectedRouteId(null);
-    setExpandedRouteIds([]);
-    setMessage("Loaded a Singapore east-side example so you can test the flow quickly.");
+    setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
+    setHasCustomDepartureTime(false);
+    setShowDeparturePicker(false);
+    setParticipants(exampleParticipants.map((participant) => ({ ...participant })));
+    setActiveStationFieldId(null);
+    setInvalidStationIds([]);
+    clearResolvedState();
+    setMessage("Loaded a sample group with MRT-based inputs so you can test the mobile flow quickly.");
   }
 
   function toggleRouteDetails(routeId: string) {
@@ -459,284 +661,317 @@ export function App() {
           </svg>
           <span>CycleWhere</span>
         </div>
-        <div className="top-nav-links">
-          <a href="#" className="active">
-            Planner
-          </a>
-          <a href="#how-it-works">How it works</a>
-          <a href="#results">Results</a>
-        </div>
+        <div className="top-nav-status">{message}</div>
       </nav>
 
       <div className="app-shell">
         <div className="bg-orb bg-orb-one" />
         <div className="bg-orb bg-orb-two" />
-        <header className="hero-card">
-          <div className="hero-copy">
-            <span className="eyebrow">CycleWhere MVP</span>
-            <h1>Plan a cyclable group route whose finish gives everyone a fair ride home.</h1>
-            <p>
-              Route-first results for Singapore groups. The endpoint is judged by public-transport
-              time spread, while the ride itself still needs to stay mostly on PCN, cycling paths,
-              and common local corridors.
-            </p>
-          </div>
 
-          <div className="hero-panel">
-            <p className="hero-panel-label">Visual theme</p>
-            <div className="theme-grid">
-              {themeOptions.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`theme-swatch ${theme === option.id ? "active" : ""}`}
-                  onClick={() => setTheme(option.id)}
-                >
-                  <strong>{option.label}</strong>
-                  <span>{option.description}</span>
-                </button>
-              ))}
-            </div>
-            <div className="status-pill">{message}</div>
+        <header className="intro-banner">
+          <span className="eyebrow">Singapore group route planner</span>
+          <h1>Find a cycling route that still leaves the ride home feeling fair.</h1>
+          <p>
+            Start from one meetup point, choose each rider&apos;s MRT station, and compare route endings by public-transport time spread.
+          </p>
+          <div className="intro-chip-row">
+            <span className="chip">2 to 10 riders</span>
+            <span className="chip">MRT-first inputs</span>
+            <span className="chip">Mobile-friendly cards</span>
           </div>
         </header>
 
         <main className="layout-grid">
-        <section className="panel panel-form">
-          <AppSectionLabel
-            eyebrow="Inputs"
-            title="Start point, homes, and time"
-            description="The planning time defaults to now, rounded to five minutes, but you can pin a specific departure just like a map app."
-          />
+          <section className="panel panel-form">
+            <AppSectionLabel
+              eyebrow="Plan"
+              title="Meetup, riders, and timing"
+              description="Departure defaults to now. Open the calendar only when you want a later start."
+            />
 
-          <div className="input-pair">
-            <label className="field">
-              <span>Start location</span>
-              <input
-                value={startQuery}
-                onChange={(event) => setStartQuery(event.target.value)}
-                placeholder="Marina Bay"
-              />
-            </label>
-
-            <label className="field">
-              <span>Planned start time</span>
-              <input
-                type="datetime-local"
-                value={startTime}
-                onChange={(event) => setStartTime(event.target.value)}
-              />
-            </label>
-          </div>
-
-          <div className="participants-header">
-            <div>
-              <h3>People</h3>
-              <p>2 to 10 named home addresses. Homes resolve to rail first, with a bus fallback if rail is too far away.</p>
+            <div className="start-card">
+              <div className="start-card-copy">
+                <span className="start-card-kicker">Start location</span>
+                <strong>Choose the shared meetup point first.</strong>
+                <p>This is where the ride begins before everyone heads home on their own route.</p>
+              </div>
+              <label className="field">
+                <span>Meetup point</span>
+                <input
+                  value={startQuery}
+                  onChange={(event) => {
+                    setStartQuery(event.target.value);
+                    clearResolvedState();
+                  }}
+                  placeholder="Marina Bay MRT"
+                />
+              </label>
+              <div className="start-card-foot">
+                <span className="time-chip">Used for every route option</span>
+                <span>Try a station, park, or landmark the whole group can meet at.</span>
+              </div>
             </div>
-            <button type="button" className="ghost-button" onClick={loadExample}>
-              Load example
-            </button>
-          </div>
 
-          <div className="participant-list">
-            {participants.map((participant, index) => {
-              const colors = avatarColors[index % avatarColors.length];
-
-              return (
-                <div
-                  className="participant-row"
-                  key={participant.id}
-                  style={{ background: colors.rowBg, border: `1px solid ${colors.border}` }}
+            <div className="time-card">
+              <div className="time-card-copy">
+                <strong>Planned start time</strong>
+                <div className="time-card-status">
+                  <span className="time-chip">{hasCustomDepartureTime ? formatDepartureSummary(scheduledStartTime) : "Now"}</span>
+                  <span>
+                    {hasCustomDepartureTime
+                      ? "Custom departure selected."
+                      : "It uses the current rounded time until you pick a later one."}
+                  </span>
+                </div>
+              </div>
+              <div className="time-card-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => {
+                    if (!showDeparturePicker && !hasCustomDepartureTime) {
+                      setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
+                    }
+                    setShowDeparturePicker((current) => !current);
+                  }}
                 >
-                  <div className="participant-avatar" style={{ background: colors.avatar }}>
-                    {participant.name ? participant.name[0].toUpperCase() : "?"}
-                  </div>
-                  <div className="participant-info">
-                    <input
-                      className="name"
-                      value={participant.name}
-                      onChange={(event) => updateParticipant(participant.id, "name", event.target.value)}
-                      placeholder="Name"
-                    />
-                    <input
-                      className="address"
-                      value={participant.address}
-                      onChange={(event) => updateParticipant(participant.id, "address", event.target.value)}
-                      placeholder="Home address or area"
-                    />
-                  </div>
-                  {participants.length > 2 ? (
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => removeParticipant(participant.id)}
-                    >
-                      ×
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="action-row">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={addParticipant}
-              disabled={participants.length >= 10}
-            >
-              Add person
-            </button>
-            <button
-              type="button"
-              className="primary-button"
-              onClick={handleResolve}
-              disabled={status !== "idle"}
-            >
-              {status === "resolving" ? "Resolving..." : "Resolve anchors"}
-            </button>
-            <button
-              type="button"
-              className="primary-button dark"
-              onClick={handlePlan}
-              disabled={status !== "idle"}
-            >
-              {status === "planning" ? "Planning..." : "Plan routes"}
-            </button>
-          </div>
-
-          <div className="note-box">
-            <strong>Fairness first.</strong>
-            <span>
-              The main score is the difference between the longest and shortest journey-home time.
-              Standard deviation breaks ties, and corridor confidence only helps later in ranking.
-            </span>
-          </div>
-        </section>
-
-        <section className="panel panel-map">
-          <AppSectionLabel
-            eyebrow="Preview"
-            title="Resolved anchors and route focus"
-            description="Homes are shown alongside the currently selected route so you can see whether the finish point makes practical sense."
-          />
-          <RouteMap
-            start={resolvedStart}
-            participants={resolvedParticipants}
-            selectedRoute={selectedRoute}
-          />
-          <div className="map-caption">
-            <span>
-              {resolvedStart
-                ? `Start pinned at ${resolvedStart.label}.`
-                : "Resolve the start point to place it on the map."}
-            </span>
-            <span>
-              {getApiBase()
-                ? "Backend endpoints configured."
-                : "Running with local fallback geocoding and transit estimates until the API is configured."}
-            </span>
-          </div>
-        </section>
-
-        <section className="panel panel-anchors">
-          <AppSectionLabel
-            eyebrow="Confirm"
-            title="Transport anchors"
-            description="This confirmation step is deliberate so weird addresses do not distort the fairness scoring."
-          />
-          <div className="anchor-grid">
-            {resolvedParticipants.length === 0 ? (
-              <p className="placeholder-copy">No anchors yet. Resolve the homes above to review the nearest MRT or bus fallback for each person.</p>
-            ) : (
-              resolvedParticipants.map((participant) => (
-                <article className="anchor-card" key={participant.id}>
-                  <h3>{participant.name || "Unnamed participant"}</h3>
-                  <p>{participant.home.label}</p>
-                  <strong>{participant.anchor.name}</strong>
-                  <span>
-                    {participant.anchor.kind === "rail" ? "Rail anchor" : "Bus fallback"} ·{" "}
-                    {participant.anchor.distanceFromHomeKm.toFixed(1)} km from home
-                  </span>
-                  {participant.anchor.fallbackSuggested && participant.anchor.fallbackAnchor ? (
-                    <p className="anchor-warning">
-                      Rail was over 2.5 km away, so the current anchor falls back to bus. The nearest rail alternative would be {participant.anchor.fallbackAnchor.name}.
-                    </p>
-                  ) : null}
-                </article>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="panel panel-results">
-          <AppSectionLabel
-            eyebrow="Results"
-            title={`Route cards${allRouteCount ? ` (${allRouteCount})` : ""}`}
-            description="Trusted corridor matches, newly discovered routes, and curated fallbacks are separated so you can see where the planner agrees with known cycling structure."
-          />
-
-          {results ? (
-            <>
-              {results.liveDiscoveryStatus !== "available" ? (
-                <div className="note-box">
-                  <strong>Live discovery status: {results.liveDiscoveryStatus}</strong>
-                  <span>
-                    {results.liveDiscoveryStatus === "partial"
-                      ? "Some live route zones were unavailable, so curated corridors remain in the mix."
-                      : "The app is currently relying on curated corridors and fallback estimates."}
-                  </span>
-                </div>
+                  {showDeparturePicker ? "Hide calendar" : hasCustomDepartureTime ? "Change time" : "Pick later time"}
+                </button>
+                {hasCustomDepartureTime ? (
+                  <button type="button" className="ghost-button" onClick={resetDepartureTime}>
+                    Use now
+                  </button>
+                ) : null}
+              </div>
+              {showDeparturePicker ? (
+                <label className="field scheduled-time-field">
+                  <span>Choose a later departure</span>
+                  <input
+                    type="datetime-local"
+                    value={scheduledStartTime}
+                    min={formatIsoLocal(roundToFiveMinutes())}
+                    step={300}
+                    onChange={(event) => {
+                      setScheduledStartTime(event.target.value);
+                      setHasCustomDepartureTime(true);
+                    }}
+                  />
+                </label>
               ) : null}
+            </div>
 
-              {results.zoneStatuses.length ? (
-                <div className="chip-row">
-                  {results.zoneStatuses.map((status) => (
-                    <span key={`${status.zoneId}-${status.status}`} className="chip">
-                      {status.zoneName}: {status.status}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
+            <div className="participants-header">
+              <div>
+                <h3>Riders</h3>
+                <p>Enter each person&apos;s name and the MRT station they usually say they stay near.</p>
+              </div>
+              <button type="button" className="ghost-button" onClick={loadExample}>
+                Load example
+              </button>
+            </div>
 
-              {results.sections.map((section: RouteSection) => (
-                <div key={section.id} className="results-stack">
-                  <div className="participants-header">
-                    <div>
-                      <h3>{section.title}</h3>
-                      <p>
-                        {section.id === "trusted-matches"
-                          ? "Routes where live discovery and known local corridors converge."
-                          : section.id === "best-discovered"
-                            ? "Real discovered routes that remain fair even without a close curated match."
-                            : section.id === "curated-alternatives"
-                              ? "Curated routes remain available as trusted fallbacks and reference points."
-                              : "These only appear for groups of at least four when one outlier is visibly longer than the rest."}
-                      </p>
+            <div className="participant-list">
+              {participants.map((participant, index) => {
+                const colors = participantStyles[participant.id];
+
+                return (
+                  <div
+                    className="participant-card"
+                    key={participant.id}
+                    style={
+                      {
+                        "--participant-accent": colors.accent,
+                        "--participant-accent-strong": colors.accentStrong,
+                        "--participant-surface": colors.surface,
+                        "--participant-border": colors.border
+                      } as CSSProperties
+                    }
+                  >
+                    <div className="participant-card-top">
+                      <div className="participant-avatar">{participant.name ? participant.name[0].toUpperCase() : index + 1}</div>
+                      <div>
+                        <strong>Rider {index + 1}</strong>
+                      </div>
+                      {participants.length > 2 ? (
+                        <button
+                          type="button"
+                          className="icon-button"
+                          onClick={() => removeParticipant(participant.id)}
+                          aria-label={`Remove rider ${index + 1}`}
+                        >
+                          &times;
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="participant-card-fields">
+                      <label className="field compact-field">
+                        <span>Name</span>
+                        <input
+                          value={participant.name}
+                          onChange={(event) => updateParticipant(participant.id, "name", event.target.value)}
+                          placeholder={`Rider ${index + 1}`}
+                        />
+                      </label>
+                      <label className="field compact-field">
+                        <span>MRT station</span>
+                        <div className="field-with-suggestions">
+                          <input
+                            className={invalidStationIds.includes(participant.id) ? "invalid-input" : undefined}
+                            aria-invalid={invalidStationIds.includes(participant.id)}
+                            value={participant.station}
+                            onFocus={() => setActiveStationFieldId(participant.id)}
+                            onBlur={() => {
+                              window.setTimeout(() => {
+                                setActiveStationFieldId((current) =>
+                                  current === participant.id ? null : current
+                                );
+                              }, 120);
+                            }}
+                            onChange={(event) => {
+                              updateParticipant(participant.id, "station", event.target.value);
+                              setActiveStationFieldId(participant.id);
+                            }}
+                            placeholder="Bedok MRT"
+                          />
+                          {activeStationFieldId === participant.id ? (
+                            <div className="station-suggestions" role="listbox" aria-label={`Suggested stations for rider ${index + 1}`}>
+                              {getStationRecommendations(participant.station).map((stationName) => (
+                                <button
+                                  key={stationName}
+                                  type="button"
+                                  className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onClick={() => {
+                                    updateParticipant(participant.id, "station", stationName);
+                                    setActiveStationFieldId(null);
+                                    setMessage(`${participant.name || `Rider ${index + 1}`} pinned to ${stationName}.`);
+                                  }}
+                                >
+                                  <span>{stationName}</span>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </label>
                     </div>
                   </div>
-                  {section.routes.map((route) => (
-                    <RouteCard
-                      key={route.id}
+                );
+              })}
+            </div>
+
+            <div className="action-row">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={addParticipant}
+                disabled={participants.length >= 10}
+              >
+                Add rider
+              </button>
+              <button
+                type="button"
+                className="primary-button dark"
+                onClick={handlePlan}
+                disabled={status !== "idle"}
+              >
+                {status === "planning" ? "Planning..." : "Plan routes"}
+              </button>
+            </div>
+
+            <div className="note-box">
+              <strong>Fairness first.</strong>
+              <span>
+                The main score is the difference between the longest and shortest trip home.
+                Standard deviation breaks ties, and corridor confidence only helps later in ranking.
+              </span>
+            </div>
+          </section>
+
+          <section className="panel panel-map">
+            <AppSectionLabel
+              eyebrow="Preview"
+              title="Start, riders, and selected route"
+              description="The start and finish markers stand apart. Each rider marker uses the same color as that rider&apos;s input card."
+            />
+
+            <RouteMap
+              start={resolvedStart}
+              participants={previewParticipants}
+              participantMarkerColors={Object.fromEntries(
+                Object.entries(participantStyles).map(([id, value]) => [id, value.accentStrong])
+              )}
+              selectedRoute={selectedRoute}
+              mapStyle="osm-bright"
+            />
+
+            <div className="map-caption">
+              <span>
+                {resolvedStart
+                  ? `Start pinned at ${resolvedStart.label}.`
+                  : "Start point will pin once planning resolves the meetup location."}
+              </span>
+              <span>Street: Closest to a mainstream road-map look, with clear roads and labels.</span>
+              <span>
+                {getApiBase()
+                  ? "Backend endpoints configured."
+                  : "Running with local fallback geocoding and transit estimates until the API is configured."}
+              </span>
+              {googleMapsRouteUrl ? (
+                <a href={googleMapsRouteUrl} target="_blank" rel="noreferrer" className="map-link">
+                  Open selected route in Google Maps
+                </a>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="panel panel-results">
+            <AppSectionLabel
+              eyebrow="Results"
+              title={`Route cards${allRouteCount ? ` (${allRouteCount})` : ""}`}
+              description="The most balanced route options stay near the top, with a few extra choices underneath."
+            />
+
+            {results ? (
+              <>
+                {results.sections.map((section: RouteSection) => (
+                  <div key={section.id} className="results-stack">
+                    <div className="participants-header">
+                      <div>
+                        <h3>{section.title}</h3>
+                        <p>
+                          {section.id === "trusted-matches"
+                            ? "These are the cleanest overall options once fairness and route quality are combined."
+                            : section.id === "best-discovered"
+                              ? "More balanced picks if you want another reasonable ending point."
+                              : section.id === "curated-alternatives"
+                                ? "Useful backups when you want a different distance or finish."
+                                : "These only appear for larger groups when most riders stay close together but one rider stretches the trip home."}
+                        </p>
+                      </div>
+                    </div>
+                    {section.routes.map((route) => (
+                      <RouteCard
+                        key={route.id}
                       route={route}
+                      startLabel={resolvedStart?.label}
                       bestFairnessRouteId={section.bestFairnessRouteId}
                       selectedRouteId={selectedRouteId}
                       expanded={expandedRouteIds.includes(route.id)}
-                      onSelect={setSelectedRouteId}
-                      onToggleDetails={toggleRouteDetails}
-                    />
-                  ))}
-                </div>
-              ))}
-            </>
-          ) : (
-            <p className="placeholder-copy">
-              No route cards yet. Resolve the anchors and run the planner to generate balanced route options.
-            </p>
-          )}
-        </section>
+                        onSelect={setSelectedRouteId}
+                        onToggleDetails={toggleRouteDetails}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="placeholder-copy">
+                No route cards yet. Pick the riders&apos; stations and run the planner to generate balanced route options.
+              </p>
+            )}
+          </section>
         </main>
       </div>
     </>

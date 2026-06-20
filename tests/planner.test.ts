@@ -6,8 +6,8 @@ function participant(id: string, name: string, lat: number, lng: number): Resolv
   return {
     id,
     name,
-    address: name,
-    home: {
+    station: name,
+    stationResolution: {
       query: name,
       label: name,
       point: { lat, lng },
@@ -148,6 +148,39 @@ describe("planner", () => {
 
     expect(routes.sections[0]?.id).toBe("trusted-matches");
     expect(routes.sections[0]?.routes[0]?.matchedCorridorId).toBe(match.corridorId);
+  });
+
+  it("drops low-agreement live variants when the trusted corridor is not materially worse", () => {
+    const curated = generateCuratedCandidates(start);
+    const trusted = curated[0]!;
+    const routes = planRoutes({
+      candidates: [
+        trusted,
+        {
+          ...trusted,
+          id: "weak-live-variant",
+          source: "discovered",
+          routeName: "Weak live variant",
+          routeQualityScore: null,
+          routeQualitySource: "unknown",
+          overlapSignature: ["far->away"],
+          popularityEvidence: undefined,
+          mixedTrafficMeters: undefined,
+          pcnCoverage: undefined,
+          cyclingPathCoverage: undefined,
+          commonCorridorCoverage: undefined
+        }
+      ],
+      participants: [
+        participant("north", "North", 1.39, 103.85),
+        participant("south", "South", 1.31, 103.85),
+        participant("east", "East", 1.35, 103.9)
+      ],
+      startTimeIso: "2026-06-18T09:00:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    expect(flattenRoutes(routes.sections).some((route) => route.id === "weak-live-variant")).toBe(false);
   });
 
   it("can surface uneven majority-friendly routes for clustered homes plus one outlier", () => {

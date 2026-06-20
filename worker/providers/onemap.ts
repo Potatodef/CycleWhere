@@ -44,12 +44,18 @@ function baseUrl(env: OneMapEnv) {
   return env.ONEMAP_BASE_URL || "https://www.onemap.gov.sg";
 }
 
-function toLabel(result: OneMapSearchResult) {
-  return (
-    [result.BLK_NO, result.ROAD_NAME, result.BUILDING].filter(Boolean).join(" ").trim() ||
-    result.SEARCHVAL ||
-    "Matched address"
-  );
+function toLabel(result: OneMapSearchResult, query: string) {
+  const structured = [result.BLK_NO, result.ROAD_NAME, result.BUILDING].filter(Boolean).join(" ").trim();
+  if (structured) {
+    return structured;
+  }
+
+  const searchValue = result.SEARCHVAL?.trim();
+  if (!searchValue || /^NIL\b/i.test(searchValue)) {
+    return query;
+  }
+
+  return searchValue;
 }
 
 function requireCredentials(env: OneMapEnv) {
@@ -136,7 +142,13 @@ function extractBestDurationMinutes(payload: unknown): number | null {
 
   for (const candidate of candidateValues) {
     if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return Math.round(candidate);
+      return normalizeDurationMinutes(candidate);
+    }
+    if (typeof candidate === "string") {
+      const parsed = Number.parseFloat(candidate);
+      if (Number.isFinite(parsed)) {
+        return normalizeDurationMinutes(parsed);
+      }
     }
   }
 
@@ -144,14 +156,46 @@ function extractBestDurationMinutes(payload: unknown): number | null {
   if (Array.isArray(itineraries)) {
     const durations = itineraries
       .map((itinerary) => (itinerary as Record<string, unknown>).duration)
+      .map((value) => (typeof value === "string" ? Number.parseFloat(value) : value))
       .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-      .map((value) => Math.round(value / 60));
+      .map((value) => normalizeDurationMinutes(value))
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
     if (durations.length > 0) {
       return Math.min(...durations);
     }
   }
 
   return null;
+}
+
+function normalizeDurationMinutes(rawDuration: number) {
+  if (!Number.isFinite(rawDuration)) {
+    return null;
+  }
+
+  // OneMap routing payloads commonly return duration-like fields in seconds.
+  return rawDuration > 240 ? Math.round(rawDuration / 60) : Math.round(rawDuration);
+}
+
+function toSingaporeDateTime(isoString: string) {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(new Date(isoString));
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+
+  return {
+    date: `${value("month")}-${value("day")}-${value("year")}`,
+    time: `${value("hour")}:${value("minute")}:00`
+  };
 }
 
 export async function geocodeWithOneMap(query: string, env: OneMapEnv): Promise<LocationResolution> {
@@ -179,7 +223,7 @@ export async function geocodeWithOneMap(query: string, env: OneMapEnv): Promise<
 
   return {
     query,
-    label: toLabel(match),
+    label: toLabel(match, query),
     point: {
       lat: Number.parseFloat(match.LATITUDE),
       lng: Number.parseFloat(match.LONGITUDE)
@@ -201,10 +245,7 @@ export async function fetchTransitTimeWithOneMap(
   query: TransitTimeQuery,
   env: OneMapEnv
 ): Promise<TransitTimeResult> {
-  const departure = new Date(query.departureIso);
-  const pad = (value: number) => `${value}`.padStart(2, "0");
-  const date = `${pad(departure.getDate())}-${pad(departure.getMonth() + 1)}-${departure.getFullYear()}`;
-  const time = `${pad(departure.getHours())}:${pad(departure.getMinutes())}:00`;
+  const { date, time } = toSingaporeDateTime(query.departureIso);
 
   const url = new URL(`${baseUrl(env)}/api/public/routingsvc/route`);
   url.searchParams.set("start", `${query.from.lat},${query.from.lng}`);
@@ -212,12 +253,24 @@ export async function fetchTransitTimeWithOneMap(
   url.searchParams.set("routeType", "pt");
   url.searchParams.set("date", date);
   url.searchParams.set("time", time);
-  url.searchParams.set("mode", "TRANSIT");
+  url.searchParams.set("mode", "transit");
   url.searchParams.set("maxWalkDistance", "1200");
+  url.searchParams.set("numItineraries", "3");
 
   const response = await fetchWithAuth(url.toString(), env);
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(
+      `OneMap transit request failed (${response.status}): ${errorBody.slice(0, 400)}`
+    );
+  }
   const payload = await response.json();
   const minutes = extractBestDurationMinutes(payload);
+  if (minutes === null) {
+    throw new Error(
+      `OneMap transit payload was unparseable: ${JSON.stringify(payload).slice(0, 400)}`
+    );
+  }
 
   return {
     minutes,
@@ -254,18 +307,25 @@ export async function fetchRouteWithOneMap(
       total_time?: number;
       total_distance?: number;
     };
-    status?: number;
+    status?: number | string;
     status_message?: string;
   };
 
-  if (!payload.route_geometry || payload.status !== 0) {
+  const statusValue =
+    typeof payload.status === "string" ? Number.parseInt(payload.status, 10) : payload.status;
+
+  if (!payload.route_geometry) {
+    return null;
+  }
+
+  if (typeof statusValue === "number" && statusValue !== 0) {
     return null;
   }
 
   return {
     geometry: decodePolyline(payload.route_geometry),
     distanceKm: Math.round(((payload.route_summary?.total_distance ?? 0) / 1000) * 10) / 10,
-    durationMinutes: Math.round(payload.route_summary?.total_time ?? 0)
+    durationMinutes: normalizeDurationMinutes(payload.route_summary?.total_time ?? 0) ?? 0
   };
 }
 

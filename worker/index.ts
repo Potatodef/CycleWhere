@@ -27,6 +27,9 @@ type Bindings = {
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
+const MAX_GEOCODE_QUERIES = 12;
+const MAX_TRANSIT_QUERIES = 120;
+const MAX_PARTICIPANTS = 10;
 
 function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
   const allowlist = configuredOrigins
@@ -148,6 +151,9 @@ app.post("/api/geocode", async (context) => {
   if (queries.length === 0) {
     return context.json<GeocodeResponse>({ results: [] });
   }
+  if (queries.length > MAX_GEOCODE_QUERIES) {
+    return context.json({ error: "Too many geocode queries." }, 400);
+  }
 
   try {
     return context.json(await geocodeManyWithOneMap(queries, context.env));
@@ -161,6 +167,9 @@ app.post("/api/geocode", async (context) => {
 app.post("/api/transit-times", async (context) => {
   const payload = (await context.req.json()) as { queries?: TransitTimeQuery[] };
   const queries = payload.queries ?? [];
+  if (queries.length > MAX_TRANSIT_QUERIES) {
+    return context.json({ error: "Too many transit queries." }, 400);
+  }
   const results = await Promise.all(
     queries.map(async (query) => {
       const cacheKey = JSON.stringify(query);
@@ -175,8 +184,13 @@ app.post("/api/transit-times", async (context) => {
           await setCachedTransit(context.env.TRANSIT_CACHE, cacheKey, result.minutes);
           return result;
         }
-      } catch {
-        // Fall back below.
+      } catch (error) {
+        console.error("Transit lookup failed", {
+          from: query.from,
+          to: query.to,
+          modeHint: query.modeHint,
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
 
       return {
@@ -191,11 +205,18 @@ app.post("/api/transit-times", async (context) => {
 
 app.post("/api/discover-cycling-routes", async (context) => {
   const payload = (await context.req.json()) as DiscoverRoutesRequest;
+  if (!payload.start?.point || !Array.isArray(payload.participants)) {
+    return context.json({ error: "Invalid discovery request." }, 400);
+  }
+  if (payload.participants.length === 0 || payload.participants.length > MAX_PARTICIPANTS) {
+    return context.json({ error: "Invalid participant count." }, 400);
+  }
 
   try {
     const result = await discoverCyclingRoutes(payload, {
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
+          version: 2,
           profile,
           start: roundedKey(start),
           end: roundedKey(end)
@@ -234,9 +255,11 @@ app.post("/api/discover-cycling-routes", async (context) => {
     });
 
     return context.json<DiscoveredRoutesResponse>(result);
-  } catch {
+  } catch (error) {
+    console.error("Live discovery failed", error);
     return context.json<DiscoveredRoutesResponse>({
       candidates: [],
+      curatedCandidates: [],
       zoneStatuses: [],
       liveDiscoveryStatus: "unavailable"
     });

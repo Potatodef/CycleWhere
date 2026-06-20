@@ -345,13 +345,13 @@ function scoreCandidates({
           transitFrom,
           participant.anchor.point,
           departureIso,
-          participant.anchor.kind
-        );
+        participant.anchor.kind
+      );
 
       return {
         participantId: participant.id,
         participantName: participant.name,
-        anchorName: participant.anchor.name,
+        stationName: participant.anchor.name,
         transitMinutes
       };
     });
@@ -385,7 +385,7 @@ function applyAgreementAndMerge(
   for (const route of discovered) {
     const potentialMatches = curated.filter((candidate) => candidate.zoneId === route.zoneId);
     let bestMatch: RoutePlan | null = null;
-    let bestOverlap = 0;
+    let bestOverlap = -1;
 
     for (const candidate of potentialMatches) {
       const overlap = overlapRatio(route.overlapSignature, candidate.overlapSignature);
@@ -395,10 +395,12 @@ function applyAgreementAndMerge(
       }
     }
 
+    const agreementScore = Math.max(bestOverlap, 0);
+
     let confidence: RouteConfidence = "novel";
-    if (bestOverlap >= 0.5) {
+    if (agreementScore >= 0.5) {
       confidence = "validated";
-    } else if (bestOverlap >= 0.25) {
+    } else if (agreementScore >= 0.25) {
       confidence = "aligned";
     }
 
@@ -406,15 +408,28 @@ function applyAgreementAndMerge(
       ...route,
       confidence,
       matchedCorridorId: bestMatch?.corridorId,
-      corridorAgreementScore: Math.round(bestOverlap * 100) / 100
+      corridorAgreementScore: Math.round(agreementScore * 100) / 100
     };
 
     if (bestMatch) {
+      const fairnessGain = bestMatch.fairnessSpreadMinutes - route.fairnessSpreadMinutes;
+      const averageGain = bestMatch.averageJourneyHomeMinutes - route.averageJourneyHomeMinutes;
+
+      // ponytail: discard low-agreement live variants unless they materially improve fairness.
+      if (agreementScore < 0.12 && fairnessGain < 8 && averageGain < 10) {
+        continue;
+      }
+
       const distanceDelta = Math.abs(bestMatch.distanceKm - route.distanceKm) / bestMatch.distanceKm;
-      if (bestOverlap >= 0.75 && distanceDelta < 0.2) {
+      if (agreementScore >= 0.75 && distanceDelta < 0.2) {
         suppressed.add(bestMatch.id);
         merged.push({
-          ...candidate,
+          ...bestMatch,
+          id: route.id,
+          source: "discovered",
+          confidence: "validated",
+          matchedCorridorId: bestMatch.corridorId,
+          corridorAgreementScore: Math.round(agreementScore * 100) / 100,
           corridorId: bestMatch.corridorId,
           corridorName: bestMatch.corridorName,
           pcnCoverage: bestMatch.pcnCoverage,
@@ -473,10 +488,10 @@ export function planRoutes(input: PlannerInput): PlannedRoutes {
     : [];
 
   const sections = [
-    buildSection("trusted-matches", "Trusted corridor matches", trustedMatches),
-    buildSection("best-discovered", "Best discovered routes", bestDiscovered),
-    buildSection("curated-alternatives", "Curated alternatives", curatedAlternatives),
-    buildSection("majority-friendly-uneven", "Majority-friendly uneven", uneven)
+    buildSection("trusted-matches", "Best fair routes", trustedMatches),
+    buildSection("best-discovered", "More fair routes", bestDiscovered),
+    buildSection("curated-alternatives", "More route options", curatedAlternatives),
+    buildSection("majority-friendly-uneven", "Uneven but usable", uneven)
   ].filter((section) => section.routes.length > 0);
 
   return {

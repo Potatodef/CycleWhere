@@ -1,5 +1,5 @@
 import { fallbackResolve } from "./geocodeFallback.js";
-import { resolveTransportAnchor } from "./anchors.js";
+import { findRailStation, resolveRailStationAnchor } from "./anchors.js";
 import { estimateTransitMinutes } from "./transit.js";
 import type {
   DiscoverRoutesRequest,
@@ -19,6 +19,18 @@ const apiBase =
   }).__CYCLEWHERE_CONFIG__?.apiBase ??
   "";
 
+function normalizeResolutionLabel(result: LocationResolution): LocationResolution {
+  const label = result.label.trim();
+  if (/^NIL\b/i.test(label)) {
+    return {
+      ...result,
+      label: result.query.trim() || label.replace(/^NIL\b/i, "").trim() || label
+    };
+  }
+
+  return result;
+}
+
 async function safeJson<T>(response: Response): Promise<T | null> {
   if (!response.ok) {
     return null;
@@ -36,14 +48,14 @@ export async function geocodeQueries(queries: string[]) {
       });
       const payload = await safeJson<GeocodeResponse>(response);
       if (payload?.results?.length === queries.length) {
-        return payload.results;
+        return payload.results.map(normalizeResolutionLabel);
       }
     } catch {
       // Fall back to local heuristics.
     }
   }
 
-  return queries.map((query) => fallbackResolve(query));
+  return queries.map((query) => normalizeResolutionLabel(fallbackResolve(query)));
 }
 
 export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
@@ -73,6 +85,7 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
   if (!apiBase) {
     return {
       candidates: [],
+      curatedCandidates: [],
       zoneStatuses: [],
       liveDiscoveryStatus: "unavailable"
     } satisfies DiscoveredRoutesResponse;
@@ -86,7 +99,10 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
     });
     const payload = await safeJson<DiscoveredRoutesResponse>(response);
     if (payload) {
-      return payload;
+      return {
+        ...payload,
+        curatedCandidates: payload.curatedCandidates ?? []
+      };
     }
   } catch {
     // Fall back to curated-only planning.
@@ -94,22 +110,39 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
 
   return {
     candidates: [],
+    curatedCandidates: [],
     zoneStatuses: [],
     liveDiscoveryStatus: "unavailable"
   } satisfies DiscoveredRoutesResponse;
 }
 
 export async function resolveParticipants(
-  drafts: Array<{ id: string; name: string; address: string }>
+  drafts: Array<{ id: string; name: string; station: string }>
 ) {
-  const homes = await geocodeQueries(drafts.map((draft) => draft.address));
+  const needsGeocoding = drafts.map((draft) => !findRailStation(draft.station));
+  const fallbackQueries = drafts
+    .filter((_, index) => needsGeocoding[index])
+    .map((draft) => draft.station);
+  const fallbackResolutions = fallbackQueries.length ? await geocodeQueries(fallbackQueries) : [];
+  let fallbackIndex = 0;
 
   return drafts.map((draft, index) => {
-    const home = homes[index] as LocationResolution;
+    const matchedStation = findRailStation(draft.station);
+    const stationResolution = matchedStation
+      ? ({
+          query: draft.station,
+          label: matchedStation.name,
+          point: matchedStation.point,
+          confidence: "high",
+          source: "fallback"
+        } satisfies LocationResolution)
+      : ((fallbackResolutions[fallbackIndex++] as LocationResolution | undefined) ??
+          fallbackResolve(draft.station));
+
     return {
       ...draft,
-      home,
-      anchor: resolveTransportAnchor(home.point)
+      stationResolution,
+      anchor: resolveRailStationAnchor(draft.station, stationResolution)
     } satisfies ResolvedParticipant;
   });
 }

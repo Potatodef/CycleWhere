@@ -1,4 +1,5 @@
 import { corridorSeeds } from "../src/data/corridors.js";
+import { anchorSeeds } from "../src/data/anchors.js";
 import { resolveTransportAnchor } from "../src/lib/anchors.js";
 import { haversineKm } from "../src/lib/geo.js";
 import type {
@@ -145,11 +146,29 @@ function zoneReason(
   return fallbackReason || "No transport-viable discovered waypoints for this zone.";
 }
 
+function routeQualityScore(candidate: RouteCandidate) {
+  if (
+    candidate.pcnCoverage === undefined ||
+    candidate.commonCorridorCoverage === undefined ||
+    candidate.mixedTrafficMeters === undefined
+  ) {
+    return candidate.routeQualityScore ?? null;
+  }
+
+  return Math.round(
+    candidate.pcnCoverage * 45 +
+      (candidate.cyclingPathCoverage ?? 0) * 20 +
+      candidate.commonCorridorCoverage * 30 -
+      candidate.mixedTrafficMeters / 25
+  );
+}
+
 export async function discoverCyclingRoutes(
   request: DiscoverRoutesRequest,
   deps: DiscoveryDeps
 ): Promise<DiscoveredRoutesResponse> {
-  const groupCentroid = averagePoint(request.participants.map((participant) => participant.home));
+  const groupCentroid = averagePoint(request.participants.map((participant) => participant.station));
+  const curatedCandidates: RouteCandidate[] = [];
 
   const zoneResults = await Promise.allSettled(
     corridorSeeds.map(async (corridor) => {
@@ -179,6 +198,7 @@ export async function discoverCyclingRoutes(
       if (!spine) {
         return {
           candidates: [] as RouteCandidate[],
+          curatedCandidate: null as RouteCandidate | null,
           status: {
             zoneId: corridor.id,
             zoneName: corridor.name,
@@ -188,6 +208,46 @@ export async function discoverCyclingRoutes(
             reason: fallbackReason
           } satisfies ZoneDiscoveryStatus
         };
+      }
+
+      const preferredAnchor = anchorSeeds.find((anchor) => anchor.id === corridor.preferredAnchorId);
+      const curatedCandidate: RouteCandidate | null =
+        usedProfile === "cycling" && preferredAnchor
+          ? ({
+              id: `${corridor.id}-trusted`,
+              zoneId: corridor.id,
+              zoneName: corridor.name,
+              source: "curated",
+              profile: "cycling",
+              corridorId: corridor.id,
+              corridorName: corridor.name,
+              routeName: corridor.name,
+              endpointName: corridor.endpointName,
+              endpoint: corridor.endpoint,
+              endpointAnchor: {
+                id: preferredAnchor.id,
+                name: preferredAnchor.name,
+                kind: preferredAnchor.kind,
+                point: preferredAnchor.point,
+                distanceFromHomeKm: haversineKm(preferredAnchor.point, corridor.endpoint),
+                fallbackSuggested: false
+              },
+              geometry: spine.geometry,
+              distanceKm: spine.distanceKm,
+              cyclingMinutes: spine.durationMinutes,
+              pcnCoverage: corridor.basePcnCoverage,
+              cyclingPathCoverage: corridor.baseCyclingPathCoverage,
+              commonCorridorCoverage: corridor.baseCommonCorridorCoverage,
+              mixedTrafficMeters: corridor.baseMixedTrafficMeters,
+              popularityEvidence: corridor.evidence,
+              routeQualityScore: null,
+              routeQualitySource: "inferred" as const,
+              overlapSignature: routeSignature(spine.geometry)
+            } satisfies RouteCandidate)
+          : null;
+
+      if (curatedCandidate) {
+        curatedCandidate.routeQualityScore = routeQualityScore(curatedCandidate);
       }
 
       const sampled = sampleSpine(spine.geometry, spine.durationMinutes);
@@ -260,6 +320,7 @@ export async function discoverCyclingRoutes(
 
       return {
         candidates,
+        curatedCandidate,
         status: {
           zoneId: corridor.id,
           zoneName: corridor.name,
@@ -278,6 +339,9 @@ export async function discoverCyclingRoutes(
   for (const result of zoneResults) {
     if (result.status === "fulfilled") {
       candidates.push(...result.value.candidates);
+      if (result.value.curatedCandidate) {
+        curatedCandidates.push(result.value.curatedCandidate);
+      }
       zoneStatuses.push(result.value.status);
     } else {
       zoneStatuses.push({
@@ -297,6 +361,7 @@ export async function discoverCyclingRoutes(
 
   return {
     candidates,
+    curatedCandidates,
     zoneStatuses,
     liveDiscoveryStatus
   };

@@ -1,6 +1,58 @@
 import { anchorSeeds } from "../data/anchors.js";
 import { haversineKm } from "./geo.js";
-import type { LatLng, TransportAnchor } from "../types.js";
+import type { LatLng, LocationResolution, TransportAnchor } from "../types.js";
+
+export const railStationSeeds = anchorSeeds.filter((anchor) => anchor.kind === "rail");
+
+function normalizeStationQuery(query: string) {
+  return query
+    .toLowerCase()
+    .replace(/[()/]/g, " ")
+    .replace(/\b(?:mrt|lrt|station)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function findRailStation(query: string) {
+  const normalized = normalizeStationQuery(query);
+  if (!normalized) {
+    return null;
+  }
+
+  return (
+    railStationSeeds.find((anchor) => normalizeStationQuery(anchor.name) === normalized) ??
+    railStationSeeds.find((anchor) => normalizeStationQuery(anchor.name).includes(normalized)) ??
+    railStationSeeds.find((anchor) => normalized.includes(normalizeStationQuery(anchor.name))) ??
+    null
+  );
+}
+
+export function resolveRailStationAnchor(
+  query: string,
+  resolution: LocationResolution | null = null
+): TransportAnchor {
+  const matchedStation = findRailStation(query);
+
+  if (matchedStation) {
+    return {
+      id: matchedStation.id,
+      name: matchedStation.name,
+      kind: "rail",
+      point: matchedStation.point,
+      distanceFromHomeKm: 0,
+      fallbackSuggested: false
+    };
+  }
+
+  return {
+    id: `rail-${query.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "station"}`,
+    name: resolution?.label || query.trim() || "Selected station",
+    kind: "rail",
+    point: resolution?.point ?? { lat: 1.3521, lng: 103.8198 },
+    distanceFromHomeKm: 0,
+    fallbackSuggested: false
+  };
+}
 
 export function resolveTransportAnchor(home: LatLng): TransportAnchor {
   const rails = anchorSeeds.filter((anchor) => anchor.kind === "rail");

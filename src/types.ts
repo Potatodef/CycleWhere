@@ -36,11 +36,11 @@ export type TransportAnchor = {
 export type ParticipantDraft = {
   id: string;
   name: string;
-  address: string;
+  station: string;
 };
 
 export type ResolvedParticipant = ParticipantDraft & {
-  home: LocationResolution;
+  stationResolution: LocationResolution;
   anchor: TransportAnchor;
 };
 
@@ -132,7 +132,7 @@ export type RouteCandidate = {
 export type ParticipantRouteTime = {
   participantId: string;
   participantName: string;
-  anchorName: string;
+  stationName: string;
   transitMinutes: number;
 };
 
@@ -193,13 +193,14 @@ export type DiscoverRoutesRequest = {
   participants: Array<{
     id: string;
     name: string;
-    home: LatLng;
+    station: LatLng;
     anchor: TransportAnchor;
   }>;
 };
 
 export type DiscoveredRoutesResponse = {
   candidates: RouteCandidate[];
+  curatedCandidates: RouteCandidate[];
   zoneStatuses: ZoneDiscoveryStatus[];
   liveDiscoveryStatus: LiveDiscoveryStatus;
 };
