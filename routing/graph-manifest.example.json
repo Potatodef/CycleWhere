@@ -1,0 +1,15 @@
+{
+  "graphVersion": "replace-with-content-hash",
+  "graphHopperVersion": "11.0",
+  "osmExtractSha256": "replace-with-sha256",
+  "osmExtractDate": "2026-06-21",
+  "profileHash": "replace-with-sha256",
+  "overlayHash": "replace-with-sha256",
+  "rankingHash": "fairness-homeward-v1",
+  "routeMatrixPassed": false,
+  "continuityPassed": false,
+  "syntheticConnectorCount": 0,
+  "namedRouteLabelFailures": 0,
+  "p95WarmSearchMs": null,
+  "p99WarmSearchMs": null
+}

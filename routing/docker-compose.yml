@@ -1,0 +1,19 @@
+services:
+  graphhopper:
+    image: graphhopper/graphhopper:11.0
+    restart: unless-stopped
+    command: ["java", "-Ddw.graphhopper.datareader.file=/data/singapore-enriched.osm.pbf", "-jar", "graphhopper-web.jar", "server", "/config/config.yml"]
+    volumes:
+      - ./config:/config:ro
+      - ./data:/data:ro
+      - graph-cache:/graph-cache
+    ports:
+      - "127.0.0.1:8989:8989"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8989/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  graph-cache:

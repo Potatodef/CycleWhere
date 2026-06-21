@@ -1,0 +1,39 @@
+graphhopper:
+  datareader.file: /data/singapore-enriched.osm.pbf
+  graph.location: /graph-cache
+  custom_models.directory: /config/custom-models
+  profiles:
+    - name: cyclewhere_official
+      turn_costs:
+        vehicle_types: [bicycle]
+        u_turn_costs: 20
+      custom_model_files: [bike.json, official.json]
+    - name: cyclewhere_quiet
+      turn_costs:
+        vehicle_types: [bicycle]
+        u_turn_costs: 20
+      custom_model_files: [bike.json, quiet.json]
+    - name: cyclewhere_bicycle
+      turn_costs:
+        vehicle_types: [bicycle]
+        u_turn_costs: 20
+      custom_model_files: [bike.json]
+  profiles_ch: []
+  profiles_lm:
+    - profile: cyclewhere_official
+    - profile: cyclewhere_quiet
+    - profile: cyclewhere_bicycle
+  graph.encoded_values: |
+    bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network,
+    road_class, road_environment, road_access, smoothness, surface, track_type,
+    roundabout, ferry_speed, orientation
+
+server:
+  application_connectors:
+    - type: http
+      port: 8989
+      bind_host: 0.0.0.0
+  admin_connectors:
+    - type: http
+      port: 8990
+      bind_host: 0.0.0.0

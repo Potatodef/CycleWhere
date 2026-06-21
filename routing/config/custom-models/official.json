@@ -1,0 +1,7 @@
+{
+  "priority": [
+    { "if": "bike_network == INTERNATIONAL || bike_network == NATIONAL || bike_network == REGIONAL || bike_network == LOCAL", "multiply_by": "1.35" },
+    { "if": "road_environment == ROAD", "multiply_by": "0.8" }
+  ],
+  "distance_influence": 80
+}

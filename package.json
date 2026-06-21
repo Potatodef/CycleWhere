@@ -12,7 +12,9 @@
     "check": "tsc --noEmit && vitest run",
     "worker:dev": "wrangler dev worker/index.ts --local",
     "worker:deploy": "wrangler deploy worker/index.ts --env production",
-    "data:refresh": "node scripts/refresh-data.mjs"
+    "data:refresh": "node scripts/refresh-data.mjs",
+    "graph:verify": "node scripts/verify-graph-promotion.mjs",
+    "graph:matrix": "node scripts/route-matrix.mjs"
   },
   "dependencies": {
     "hono": "^4.7.2",

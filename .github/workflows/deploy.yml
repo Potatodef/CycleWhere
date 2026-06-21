@@ -20,6 +20,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npx wrangler whoami
+      - run: npx wrangler d1 execute cyclewhere-transit-cache --remote --file=worker/schema.sql
       - run: npx wrangler deploy worker/index.ts --env production
 
   deploy-pages:

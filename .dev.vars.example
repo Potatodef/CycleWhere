@@ -1,2 +1,9 @@
-ONEMAP_API_EMAIL=your-onemap-email@example.com
-ONEMAP_API_PASSWORD=your-onemap-password
+GRAPHHOPPER_BASE_URL=http://127.0.0.1:8989
+GRAPHHOPPER_PROFILE_OFFICIAL=cyclewhere_official
+GRAPHHOPPER_PROFILE_QUIET=cyclewhere_quiet
+GRAPHHOPPER_PROFILE_BICYCLE=cyclewhere_bicycle
+GRAPH_VERSION=local-development
+PROFILE_HASH=local-development
+OVERLAY_HASH=local-development
+RANKING_HASH=fairness-homeward-v1
+PAGE_TOKEN_SECRET=replace-with-a-long-random-value

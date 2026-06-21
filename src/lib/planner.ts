@@ -37,6 +37,8 @@ type TransitQueryBundle = Array<{
   };
 }>;
 
+export const TRANSIT_HANDOFF_MINUTES = 10;
+
 function routeSignature(points: Array<{ lat: number; lng: number }>) {
   const signature: string[] = [];
   for (let index = 1; index < points.length; index += 1) {
@@ -94,6 +96,9 @@ function fairnessBandRank(spreadMinutes: number) {
 }
 
 function compareRoutes(a: RoutePlan, b: RoutePlan) {
+  if (a.searchRank !== undefined && b.searchRank !== undefined && a.searchRank !== b.searchRank) {
+    return a.searchRank - b.searchRank;
+  }
   const fairnessBandDelta = fairnessBandRank(a.fairnessSpreadMinutes) - fairnessBandRank(b.fairnessSpreadMinutes);
   if (fairnessBandDelta !== 0) {
     return fairnessBandDelta;
@@ -106,9 +111,6 @@ function compareRoutes(a: RoutePlan, b: RoutePlan) {
   }
   if (a.fairnessStdDeviationMinutes !== b.fairnessStdDeviationMinutes) {
     return a.fairnessStdDeviationMinutes - b.fairnessStdDeviationMinutes;
-  }
-  if (a.fairnessSource !== b.fairnessSource) {
-    return a.fairnessSource === "exact" ? -1 : 1;
   }
   if ((a.verifiedCoverage ?? 0) !== (b.verifiedCoverage ?? 0)) {
     return (b.verifiedCoverage ?? 0) - (a.verifiedCoverage ?? 0);
@@ -125,7 +127,7 @@ function compareRoutes(a: RoutePlan, b: RoutePlan) {
     return confidenceDelta;
   }
 
-  return a.distanceKm - b.distanceKm;
+  return a.distanceKm - b.distanceKm || a.id.localeCompare(b.id);
 }
 
 function selectDiverseRoutes(candidates: RoutePlan[]) {
@@ -206,7 +208,9 @@ export function buildTransitQueries({
 
   for (const candidate of candidates) {
     const transitDeparture = new Date(startTimeIso);
-    transitDeparture.setMinutes(transitDeparture.getMinutes() + candidate.cyclingMinutes + 90);
+    transitDeparture.setMinutes(
+      transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES
+    );
     const departureIso = transitDeparture.toISOString();
     const transitFrom = transitOriginPoint(candidate);
 
@@ -234,7 +238,9 @@ function scoreCandidates({
 }: PlannerInput) {
   return candidates.map((candidate) => {
     const transitDeparture = new Date(startTimeIso);
-    transitDeparture.setMinutes(transitDeparture.getMinutes() + candidate.cyclingMinutes + 90);
+    transitDeparture.setMinutes(
+      transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES
+    );
     const departureIso = transitDeparture.toISOString();
     const transitFrom = transitOriginPoint(candidate);
 

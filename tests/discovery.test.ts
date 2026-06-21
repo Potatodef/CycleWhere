@@ -41,6 +41,7 @@ describe("live discovery", () => {
           label: "Marina Bay",
           point: { lat: 1.2808, lng: 103.8545 }
         },
+        departureIso: "2026-06-21T10:00:00.000Z",
         participants: [
           {
             id: "a",
@@ -63,11 +64,10 @@ describe("live discovery", () => {
     );
 
     expect(fetchRoute).toHaveBeenCalledTimes(1);
-    expect(result.candidates).toHaveLength(0);
-    expect(result.curatedCandidates).toHaveLength(1);
-    expect(result.curatedCandidates[0]?.verifiedCoverage).toBeGreaterThanOrEqual(0.55);
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]?.verifiedCoverage).toBeGreaterThanOrEqual(0.55);
     expect(result.zoneStatuses[0]?.status).toBe("available");
     expect(result.liveDiscoveryStatus).toBe("available");
-    expect(result.networkVersion).toBeTruthy();
+    expect(result.graphVersion).toBeTruthy();
   });
 });

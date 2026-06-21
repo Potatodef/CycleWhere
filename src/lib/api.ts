@@ -2,11 +2,13 @@ import { fallbackResolve } from "./geocodeFallback.js";
 import { findRailStation, resolveRailStationAnchor } from "./anchors.js";
 import { estimateTransitMinutes } from "./transit.js";
 import type {
-  DiscoverRoutesRequest,
-  DiscoveredRoutesResponse,
   GeocodeResponse,
   LocationResolution,
   ResolvedParticipant,
+  RouteSearchError,
+  RouteSearchPageResult,
+  RouteSearchRequest,
+  RouteSearchResult,
   TransitTimeQuery,
   TransitTimeResult,
   TransitTimesResponse
@@ -81,57 +83,31 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
   }));
 }
 
-export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
-  if (!apiBase) {
-    return {
-      candidates: [],
-      curatedCandidates: [],
-      zoneStatuses: [],
-      liveDiscoveryStatus: "unavailable",
-      networkVersion: "local",
-      nextOffset: null,
-      hasMore: false
-    } satisfies DiscoveredRoutesResponse;
+async function routeSearchResponse<T>(response: Response) {
+  const payload = (await response.json()) as T | RouteSearchError;
+  if (!response.ok) {
+    const routeError = payload as RouteSearchError;
+    const error = new Error(routeError.error || "Route search failed.");
+    Object.assign(error, { code: routeError.code, status: response.status });
+    throw error;
   }
+  return payload as T;
+}
 
-  try {
-    const response = await fetch(`${apiBase}/api/discover-cycling-routes`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request)
-    });
-    if (response.status === 409) {
-      const payload = (await response.json()) as { networkVersion?: string };
-      const error = new Error("Discovery network version changed.");
-      Object.assign(error, {
-        code: "STALE_NETWORK_VERSION",
-        networkVersion: payload.networkVersion
-      });
-      throw error;
-    }
-    const payload = await safeJson<DiscoveredRoutesResponse>(response);
-    if (payload) {
-      return {
-        ...payload,
-        curatedCandidates: payload.curatedCandidates ?? []
-      };
-    }
-  } catch (error) {
-    if ((error as { code?: string })?.code === "STALE_NETWORK_VERSION") {
-      throw error;
-    }
-    // Fall back to curated-only planning.
-  }
+export async function createRouteSearch(request: RouteSearchRequest) {
+  const response = await fetch(`${apiBase}/api/route-searches`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request)
+  });
+  return routeSearchResponse<RouteSearchResult>(response);
+}
 
-  return {
-    candidates: [],
-    curatedCandidates: [],
-    zoneStatuses: [],
-    liveDiscoveryStatus: "unavailable",
-    networkVersion: "unavailable",
-    nextOffset: null,
-    hasMore: false
-  } satisfies DiscoveredRoutesResponse;
+export async function loadRouteSearchPage(pageToken: string) {
+  const response = await fetch(
+    `${apiBase}/api/route-searches/page?token=${encodeURIComponent(pageToken)}`
+  );
+  return routeSearchResponse<RouteSearchPageResult>(response);
 }
 
 export async function resolveParticipants(
