@@ -40,7 +40,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -58,7 +59,8 @@ a {
   z-index: 50;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 16px;
   min-height: 62px;
   padding: 10px 20px;
@@ -83,7 +85,7 @@ a {
   max-width: 52ch;
   color: var(--muted);
   font-size: 0.88rem;
-  text-align: right;
+  text-align: left;
 }
 
 .app-shell {
@@ -237,6 +239,90 @@ a {
 .field-inline-button {
   flex: none;
   white-space: nowrap;
+}
+
+.results-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--brand) 5%, var(--surface-strong) 95%);
+}
+
+.results-toolbar-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.results-toolbar-copy span,
+.filter-sheet-head p,
+.empty-filter-state span {
+  color: var(--muted);
+}
+
+.empty-filter-state {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface-strong);
+}
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(18, 24, 29, 0.2);
+}
+
+.filter-sheet {
+  width: min(100%, 520px);
+  display: grid;
+  gap: 16px;
+  padding: 14px 18px 18px;
+  border-radius: 24px 24px 0 0;
+  background: rgba(255, 250, 244, 0.98);
+  box-shadow: var(--shadow-card);
+}
+
+.filter-sheet-handle {
+  width: 56px;
+  height: 6px;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 78%, var(--text) 22%);
+}
+
+.filter-sheet-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.filter-sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.compact-field select {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
 }
 
 input {
@@ -795,6 +881,16 @@ input:focus-visible {
 
   .app-shell {
     padding: 16px;
+  }
+
+  .results-toolbar,
+  .filter-sheet-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .results-toolbar-copy {
+    width: 100%;
   }
 
   .intro-banner,

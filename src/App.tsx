@@ -1,6 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { railStationSeeds, snapMeetupPointToLand } from "./lib/anchors.js";
 import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
+import { filterPlannedRoutes } from "./lib/routeFilters.js";
 import {
   discoverCyclingRoutes,
   geocodeQueries,
@@ -123,6 +124,9 @@ const initialParticipants: ParticipantInput[] = [
   { id: "starter-2", name: "", station: "", colorIndex: 1 }
 ];
 
+const distanceFilterOptions = [0, 5, 10, 15, 20];
+const spreadFilterOptions = [0, 10, 20, 30, 45];
+
 const stationSuggestions = railStationSeeds.map((station) => station.name);
 
 function normalizeStationQuery(query: string) {
@@ -213,6 +217,19 @@ function buildGoogleMapsRouteUrl(
   url.searchParams.set("destination", `${route.endpoint.lat},${route.endpoint.lng}`);
   url.searchParams.set("travelmode", "bicycling");
   return url.toString();
+}
+
+function geolocationErrorMessage(error?: GeolocationPositionError) {
+  switch (error?.code) {
+    case 1:
+      return "Location permission was denied. Allow location access in the browser and try again.";
+    case 2:
+      return "Current location is unavailable on this device right now. Try again in a moment.";
+    case 3:
+      return "Current location took too long to load. Try again.";
+    default:
+      return "Current location could not be read. Check location permission and try again.";
+  }
 }
 
 function nextColorIndex(participants: ParticipantInput[]) {
@@ -407,6 +424,9 @@ export function App() {
   const [results, setResults] = useState<PlannedRoutes | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [expandedRouteIds, setExpandedRouteIds] = useState<string[]>([]);
+  const [showRouteFilters, setShowRouteFilters] = useState(false);
+  const [minimumDistanceKm, setMinimumDistanceKm] = useState(0);
+  const [maximumFairnessSpreadMinutes, setMaximumFairnessSpreadMinutes] = useState(0);
   const [status, setStatus] = useState<"idle" | "planning">("idle");
   const [message, setMessage] = useState(
     "Pick one meetup point and each rider's MRT station, then compare route endings by how fair the ride home looks."
@@ -449,8 +469,24 @@ export function App() {
     [participants]
   );
 
+  const filteredResults = useMemo(
+    () =>
+      results
+        ? filterPlannedRoutes(results, {
+            minimumDistanceKm,
+            maximumFairnessSpreadMinutes
+          })
+        : null,
+    [results, minimumDistanceKm, maximumFairnessSpreadMinutes]
+  );
+
   const allRoutes = useMemo(
-    () => results?.sections.flatMap((section) => section.routes) ?? [],
+    () => filteredResults?.sections.flatMap((section) => section.routes) ?? [],
+    [filteredResults]
+  );
+
+  const totalRouteCount = useMemo(
+    () => results?.sections.reduce((count, section) => count + section.routes.length, 0) ?? 0,
     [results]
   );
 
@@ -497,6 +533,13 @@ export function App() {
   const allRouteCount = allRoutes.length;
   const googleMapsRouteUrl =
     resolvedStart && selectedRoute ? buildGoogleMapsRouteUrl(resolvedStart.point, selectedRoute) : null;
+  const hasActiveRouteFilters = minimumDistanceKm > 0 || maximumFairnessSpreadMinutes > 0;
+  const routeFilterSummary = [
+    minimumDistanceKm > 0 ? `${minimumDistanceKm} km+` : null,
+    maximumFairnessSpreadMinutes > 0 ? `Spread <= ${maximumFairnessSpreadMinutes} min` : null
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   function clearResolvedState() {
     setResolvedStart(null);
@@ -609,6 +652,7 @@ export function App() {
     }
 
     setIsLocatingStart(true);
+    setMessage("Checking your current location...");
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const landed = snapMeetupPointToLand(
@@ -635,8 +679,8 @@ export function App() {
         );
         setIsLocatingStart(false);
       },
-      () => {
-        setMessage("Current location could not be read. Check location permission and try again.");
+      (error) => {
+        setMessage(geolocationErrorMessage(error));
         setIsLocatingStart(false);
       },
       {
@@ -649,11 +693,13 @@ export function App() {
 
   async function handlePlan() {
     const trimmedStartQuery = startQuery.trim();
-    const [startResolution] = trimmedStartQuery ? await geocodeQueries([trimmedStartQuery]) : [null];
+    const [startResolution] = trimmedStartQuery && !resolvedStart
+      ? await geocodeQueries([trimmedStartQuery])
+      : [null];
     const unresolvedStations = participants
       .filter((participant) => !findExactStation(participant.station))
       .map((participant) => participant.id);
-    const hasInvalidMeetup = !trimmedStartQuery || !hasReliableMeetupResolution(startResolution);
+    const hasInvalidMeetup = !resolvedStart && (!trimmedStartQuery || !hasReliableMeetupResolution(startResolution));
 
     setInvalidStartQuery(hasInvalidMeetup);
     setStartFieldMessage(
@@ -781,6 +827,11 @@ export function App() {
         ? current.filter((currentId) => currentId !== routeId)
         : [...current, routeId]
     );
+  }
+
+  function resetRouteFilters() {
+    setMinimumDistanceKm(0);
+    setMaximumFairnessSpreadMinutes(0);
   }
 
   return (
@@ -1118,13 +1169,23 @@ export function App() {
           <section className="panel panel-results">
             <AppSectionLabel
               eyebrow="Results"
-              title={`Route cards${allRouteCount ? ` (${allRouteCount})` : ""}`}
+              title={`Route cards${allRouteCount ? ` (${allRouteCount})` : totalRouteCount ? ` (${totalRouteCount})` : ""}`}
               description="The most balanced route options stay near the top, with a few extra choices underneath."
             />
 
             {results ? (
               <>
-                {results.sections.map((section: RouteSection) => (
+                <div className="results-toolbar">
+                  <button type="button" className="secondary-button" onClick={() => setShowRouteFilters(true)}>
+                    Filter routes
+                  </button>
+                  <div className="results-toolbar-copy">
+                    <strong>{allRouteCount} shown</strong>
+                    <span>{hasActiveRouteFilters ? routeFilterSummary : "Showing every route option."}</span>
+                  </div>
+                </div>
+
+                {filteredResults?.sections.length ? filteredResults.sections.map((section: RouteSection) => (
                   <div key={section.id} className="results-stack">
                     <div className="participants-header">
                       <div>
@@ -1153,7 +1214,15 @@ export function App() {
                       />
                     ))}
                   </div>
-                ))}
+                )) : (
+                  <div className="empty-filter-state">
+                    <strong>No routes match those filters.</strong>
+                    <span>Try a lower minimum distance or a wider fairness spread.</span>
+                    <button type="button" className="secondary-button" onClick={resetRouteFilters}>
+                      Reset filters
+                    </button>
+                  </div>
+                )}
               </>
             ) : (
               <p className="placeholder-copy">
@@ -1163,6 +1232,66 @@ export function App() {
           </section>
         </main>
       </div>
+
+      {showRouteFilters ? (
+        <div className="sheet-backdrop" role="presentation" onClick={() => setShowRouteFilters(false)}>
+          <div
+            className="filter-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Route filters"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="filter-sheet-handle" />
+            <div className="filter-sheet-head">
+              <div>
+                <strong>Filter routes</strong>
+                <p>Show only routes that match your distance and fairness targets.</p>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setShowRouteFilters(false)} aria-label="Close filters">
+                &times;
+              </button>
+            </div>
+
+            <label className="field compact-field">
+              <span>Minimum route distance</span>
+              <select
+                value={minimumDistanceKm}
+                onChange={(event) => setMinimumDistanceKm(Number(event.target.value))}
+              >
+                {distanceFilterOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value === 0 ? "Any distance" : `${value} km or more`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field compact-field">
+              <span>Maximum fairness spread</span>
+              <select
+                value={maximumFairnessSpreadMinutes}
+                onChange={(event) => setMaximumFairnessSpreadMinutes(Number(event.target.value))}
+              >
+                {spreadFilterOptions.map((value) => (
+                  <option key={value} value={value}>
+                    {value === 0 ? "Any spread" : `${value} min or less`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="filter-sheet-actions">
+              <button type="button" className="secondary-button" onClick={resetRouteFilters}>
+                Reset
+              </button>
+              <button type="button" className="primary-button dark" onClick={() => setShowRouteFilters(false)}>
+                Show {allRouteCount || totalRouteCount} routes
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
