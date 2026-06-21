@@ -224,6 +224,21 @@ a {
   color: color-mix(in srgb, var(--uneven) 78%, var(--text) 22%);
 }
 
+.field-inline {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.field-inline input {
+  flex: 1;
+}
+
+.field-inline-button {
+  flex: none;
+  white-space: nowrap;
+}
+
 input {
   width: 100%;
   padding: 13px 14px;
@@ -802,6 +817,10 @@ input:focus-visible {
 
   .participant-card-fields {
     grid-template-columns: 1fr;
+  }
+
+  .field-inline {
+    flex-direction: column;
   }
 
   .map-shell {

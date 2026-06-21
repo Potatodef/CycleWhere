@@ -3,6 +3,7 @@ import { haversineKm } from "./geo.js";
 import type { LatLng, LocationResolution, TransportAnchor } from "../types.js";
 
 export const railStationSeeds = anchorSeeds.filter((anchor) => anchor.kind === "rail");
+const OFFSHORE_SNAP_KM = 1.5;
 
 function normalizeStationQuery(query: string) {
   return query
@@ -102,5 +103,28 @@ export function resolveTransportAnchor(home: LatLng): TransportAnchor {
           distanceFromHomeKm: nearestRail.distanceKm
         }
       : undefined
+  };
+}
+
+export function snapMeetupPointToLand(point: LatLng, label: string) {
+  const nearestAnchor = anchorSeeds
+    .map((anchor) => ({
+      anchor,
+      distanceKm: haversineKm(point, anchor.point)
+    }))
+    .sort((a, b) => a.distanceKm - b.distanceKm)[0];
+
+  if (!nearestAnchor || nearestAnchor.distanceKm <= OFFSHORE_SNAP_KM) {
+    return {
+      label,
+      point,
+      snapped: false
+    };
+  }
+
+  return {
+    label: `Near ${nearestAnchor.anchor.name}`,
+    point: nearestAnchor.anchor.point,
+    snapped: true
   };
 }

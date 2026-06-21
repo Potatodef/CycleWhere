@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { railStationSeeds } from "./lib/anchors.js";
+import { railStationSeeds, snapMeetupPointToLand } from "./lib/anchors.js";
 import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
 import {
   discoverCyclingRoutes,
@@ -392,6 +392,7 @@ export function App() {
   const [scheduledStartTime, setScheduledStartTime] = useState(formatIsoLocal(roundToFiveMinutes()));
   const [hasCustomDepartureTime, setHasCustomDepartureTime] = useState(false);
   const [showDeparturePicker, setShowDeparturePicker] = useState(false);
+  const [isLocatingStart, setIsLocatingStart] = useState(false);
   const [participants, setParticipants] = useState(initialParticipants);
   const [invalidStartQuery, setInvalidStartQuery] = useState(false);
   const [startFieldMessage, setStartFieldMessage] = useState<string | null>(null);
@@ -511,6 +512,13 @@ export function App() {
     setShowDeparturePicker(false);
   }
 
+  function resetPlannedState() {
+    setResolvedParticipants([]);
+    setResults(null);
+    setSelectedRouteId(null);
+    setExpandedRouteIds([]);
+  }
+
   function updateParticipant(id: string, key: "name" | "station", value: string) {
     if (key === "station") {
       setInvalidStationIds((current) => current.filter((currentId) => currentId !== id));
@@ -573,6 +581,72 @@ export function App() {
     return resolved;
   }
 
+  async function resolveParticipantsWithKnownStart() {
+    const start = resolvedStart;
+    if (!start) {
+      throw new Error("Resolved start is missing.");
+    }
+
+    const people = await resolveParticipants(
+      participants.map((participant, index) => ({
+        id: participant.id,
+        name: fallbackParticipantName(participant, index),
+        station: participant.station
+      }))
+    );
+
+    setResolvedParticipants(people);
+    return {
+      start,
+      participants: people
+    };
+  }
+
+  function useCurrentLocation() {
+    if (!navigator.geolocation) {
+      setMessage("Current location is unavailable in this browser.");
+      return;
+    }
+
+    setIsLocatingStart(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const landed = snapMeetupPointToLand(
+          {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          },
+          "Current location"
+        );
+
+        setStartQuery(landed.label);
+        setInvalidStartQuery(false);
+        setStartFieldMessage(
+          landed.snapped ? "Current location looked offshore, so it was snapped to the nearest land anchor." : null
+        );
+        setResolvedStart({
+          label: landed.label,
+          point: landed.point,
+          source: "fallback"
+        });
+        resetPlannedState();
+        setMessage(
+          landed.snapped ? `Using ${landed.label} instead of an offshore point.` : "Using your current location as the meetup point."
+        );
+        setIsLocatingStart(false);
+      },
+      () => {
+        setMessage("Current location could not be read. Check location permission and try again.");
+        setIsLocatingStart(false);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 60000
+      }
+    );
+  }
+
   async function handlePlan() {
     const trimmedStartQuery = startQuery.trim();
     const [startResolution] = trimmedStartQuery ? await geocodeQueries([trimmedStartQuery]) : [null];
@@ -607,7 +681,9 @@ export function App() {
       const prepareResolved =
         resolvedStart && resolvedParticipants.length === participants.length
           ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
-          : resolveInputs(startResolution!);
+          : resolvedStart
+            ? resolveParticipantsWithKnownStart()
+            : resolveInputs(startResolution!);
 
       const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
 
@@ -769,18 +845,28 @@ export function App() {
               </div>
               <label className="field">
                 <span>Meetup point</span>
-                <input
-                  className={invalidStartQuery ? "invalid-input" : undefined}
-                  aria-invalid={invalidStartQuery}
-                  value={startQuery}
-                  onChange={(event) => {
-                    setInvalidStartQuery(false);
-                    setStartFieldMessage(null);
-                    setStartQuery(event.target.value);
-                    clearResolvedState();
-                  }}
-                  placeholder="Marina Bay MRT"
-                />
+                <div className="field-inline">
+                  <input
+                    className={invalidStartQuery ? "invalid-input" : undefined}
+                    aria-invalid={invalidStartQuery}
+                    value={startQuery}
+                    onChange={(event) => {
+                      setInvalidStartQuery(false);
+                      setStartFieldMessage(null);
+                      setStartQuery(event.target.value);
+                      clearResolvedState();
+                    }}
+                    placeholder="Marina Bay MRT"
+                  />
+                  <button
+                    type="button"
+                    className="secondary-button field-inline-button"
+                    onClick={useCurrentLocation}
+                    disabled={isLocatingStart}
+                  >
+                    {isLocatingStart ? "Locating..." : "Use current location"}
+                  </button>
+                </div>
                 {startFieldMessage ? <span className="field-error">{startFieldMessage}</span> : null}
               </label>
               <div className="start-card-foot">

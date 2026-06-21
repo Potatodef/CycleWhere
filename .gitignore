@@ -10,4 +10,5 @@ coverage
 .env
 .env.local
 .dev.vars
+.edge-tmp
 CODEX_HANDOFF.md
