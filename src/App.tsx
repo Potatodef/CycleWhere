@@ -317,7 +317,7 @@ function RouteCard({
           </div>
           <p>{routeDirectionLabel(route, startLabel)}</p>
           <div className="chip-row">
-            {bestFairnessRouteId === route.id ? <span className="chip">Best fairness in section</span> : null}
+            {bestFairnessRouteId === route.id ? <span className="chip">Best overall in section</span> : null}
             <span className="chip">{route.fairnessSource === "exact" ? "Exact fairness" : "Estimated fairness"}</span>
             {route.origin === "named-route" ? <span className="chip">Named official route</span> : null}
             {route.officialRouteSurface === "mixed" ? <span className="chip">Mixed surface</span> : null}
@@ -427,10 +427,25 @@ export function App() {
     resolve: (value: PlannedRoutes) => void;
     reject: (reason?: unknown) => void;
   } | null>(null);
+  const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const filterDialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = "neutral-ink";
   }, []);
+
+  useEffect(() => {
+    const dialog = filterDialogRef.current;
+    if (showRouteFilters && dialog && !dialog.open) {
+      dialog.showModal();
+    }
+  }, [showRouteFilters]);
+
+  function closeRouteFilters() {
+    filterDialogRef.current?.close();
+    setShowRouteFilters(false);
+    filterButtonRef.current?.focus();
+  }
 
   useEffect(() => {
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
@@ -1228,8 +1243,8 @@ export function App() {
             <div className="note-box">
               <strong>Fairness first.</strong>
               <span>
-                The main score is the difference between the longest and shortest trip home.
-                Standard deviation breaks ties, then verified-network coverage helps separate close options.
+                Routes stay in fairness bands. Within each band, a shorter average journey home ranks first,
+                followed by the difference between the longest and shortest trips home.
               </span>
             </div>
           </section>
@@ -1304,7 +1319,12 @@ export function App() {
             {results ? (
               <>
                 <div className="results-toolbar">
-                  <button type="button" className="secondary-button" onClick={() => setShowRouteFilters(true)}>
+                  <button
+                    ref={filterButtonRef}
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setShowRouteFilters(true)}
+                  >
                     Filter routes
                   </button>
                   <div className="results-toolbar-copy">
@@ -1328,7 +1348,7 @@ export function App() {
                             ? "These have exact ride-home checks and the strongest fairness after route quality is applied."
                             : section.id === "more-route-options"
                               ? "Useful backups when you want a different distance or finish. Estimated fairness stays here until exact checks run."
-                              : "These only appear for larger groups when most riders stay close together but one rider stretches the trip home."}
+                              : "These exceed the usual fairness target, but remain visible so difficult groups still have honest options."}
                         </p>
                       </div>
                     </div>
@@ -1380,21 +1400,32 @@ export function App() {
       </div>
 
       {showRouteFilters ? (
-        <div className="sheet-backdrop" role="presentation" onClick={() => setShowRouteFilters(false)}>
-          <div
-            className="filter-sheet"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Route filters"
-            onClick={(event) => event.stopPropagation()}
-          >
+        <dialog
+          ref={filterDialogRef}
+          className="filter-sheet"
+          aria-label="Route filters"
+          onCancel={(event) => {
+            event.preventDefault();
+            closeRouteFilters();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              closeRouteFilters();
+            }
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeRouteFilters();
+            }
+          }}
+        >
             <div className="filter-sheet-handle" />
             <div className="filter-sheet-head">
               <div>
                 <strong>Filter routes</strong>
                 <p>Show only routes that match your distance and fairness targets.</p>
               </div>
-              <button type="button" className="icon-button" onClick={() => setShowRouteFilters(false)} aria-label="Close filters">
+              <button type="button" className="icon-button" onClick={closeRouteFilters} aria-label="Close filters">
                 &times;
               </button>
             </div>
@@ -1431,12 +1462,11 @@ export function App() {
               <button type="button" className="secondary-button" onClick={resetRouteFilters}>
                 Reset
               </button>
-              <button type="button" className="primary-button dark" onClick={() => setShowRouteFilters(false)}>
+              <button type="button" className="primary-button dark" onClick={closeRouteFilters}>
                 Show {allRouteCount || totalRouteCount} routes
               </button>
             </div>
-          </div>
-        </div>
+        </dialog>
       ) : null}
     </>
   );

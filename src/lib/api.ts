@@ -116,7 +116,10 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
         curatedCandidates: payload.curatedCandidates ?? []
       };
     }
-  } catch {
+  } catch (error) {
+    if ((error as { code?: string })?.code === "STALE_NETWORK_VERSION") {
+      throw error;
+    }
     // Fall back to curated-only planning.
   }
 

@@ -274,25 +274,21 @@ a {
   background: var(--surface-strong);
 }
 
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 16px;
-  background: rgba(18, 24, 29, 0.2);
-}
-
 .filter-sheet {
   width: min(100%, 520px);
+  max-width: calc(100% - 32px);
   display: grid;
   gap: 16px;
+  margin: auto auto 0;
   padding: 14px 18px 18px;
+  border: 0;
   border-radius: 24px 24px 0 0;
   background: rgba(255, 250, 244, 0.98);
   box-shadow: var(--shadow-card);
+}
+
+.filter-sheet::backdrop {
+  background: rgba(18, 24, 29, 0.2);
 }
 
 .filter-sheet-handle {

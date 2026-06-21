@@ -89,15 +89,23 @@ function confidenceRank(coverage = 0) {
   return 0;
 }
 
+function fairnessBandRank(spreadMinutes: number) {
+  return spreadMinutes <= 20 ? 0 : spreadMinutes <= 30 ? 1 : 2;
+}
+
 function compareRoutes(a: RoutePlan, b: RoutePlan) {
+  const fairnessBandDelta = fairnessBandRank(a.fairnessSpreadMinutes) - fairnessBandRank(b.fairnessSpreadMinutes);
+  if (fairnessBandDelta !== 0) {
+    return fairnessBandDelta;
+  }
+  if (a.averageJourneyHomeMinutes !== b.averageJourneyHomeMinutes) {
+    return a.averageJourneyHomeMinutes - b.averageJourneyHomeMinutes;
+  }
   if (a.fairnessSpreadMinutes !== b.fairnessSpreadMinutes) {
     return a.fairnessSpreadMinutes - b.fairnessSpreadMinutes;
   }
   if (a.fairnessStdDeviationMinutes !== b.fairnessStdDeviationMinutes) {
     return a.fairnessStdDeviationMinutes - b.fairnessStdDeviationMinutes;
-  }
-  if (a.averageJourneyHomeMinutes !== b.averageJourneyHomeMinutes) {
-    return a.averageJourneyHomeMinutes - b.averageJourneyHomeMinutes;
   }
   if (a.fairnessSource !== b.fairnessSource) {
     return a.fairnessSource === "exact" ? -1 : 1;
@@ -284,16 +292,15 @@ export function planRoutes(input: PlannerInput): PlannedRoutes {
     section: toFairnessSection(route)
   }));
 
-  const validRoutes = scored.filter((route) => route.fairnessSpreadMinutes <= 30);
   const bestFairRoutes = selectDiverseRoutes(
-    validRoutes.filter((route) => route.section === "best-fair-routes")
+    scored.filter((route) => route.section === "best-fair-routes")
   );
   const usedBestFair = new Set(bestFairRoutes.map((route) => route.id));
   const moreRouteOptions = selectDiverseRoutes(
-    validRoutes
+    scored
       .filter((route) => route.section === "more-route-options")
       .concat(
-        validRoutes.filter((route) => route.section === "best-fair-routes" && !usedBestFair.has(route.id))
+        scored.filter((route) => route.section === "best-fair-routes" && !usedBestFair.has(route.id))
       )
       .filter((route) => !bestFairRoutes.some((selected) => similarRoute(selected, route)))
   );

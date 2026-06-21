@@ -142,6 +142,46 @@ describe("planner", () => {
     expect(routes.sections[0]?.routes[0]?.id).toBe("best");
   });
 
+  it("prefers a fair route with a shorter journey home and keeps uneven alternatives", () => {
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "equal-but-remote", overlapSignature: ["remote"] }),
+        routeCandidate({ id: "homeward", overlapSignature: ["homeward"] }),
+        routeCandidate({ id: "stretched", overlapSignature: ["stretched"] }),
+        routeCandidate({ id: "uneven", overlapSignature: ["uneven"] })
+      ],
+      participants: [
+        participant("a", "A", 1.35, 103.84),
+        participant("b", "B", 1.36, 103.85),
+        participant("c", "C", 1.37, 103.86)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      transitOverrides: {
+        "equal-but-remote::a": 90,
+        "equal-but-remote::b": 91,
+        "equal-but-remote::c": 92,
+        "homeward::a": 18,
+        "homeward::b": 22,
+        "homeward::c": 26,
+        "stretched::a": 80,
+        "stretched::b": 90,
+        "stretched::c": 105,
+        "uneven::a": 15,
+        "uneven::b": 40,
+        "uneven::c": 55
+      }
+    });
+
+    expect(routes.sections[0]?.routes.map((route) => route.id).slice(0, 2)).toEqual([
+      "homeward",
+      "equal-but-remote"
+    ]);
+    expect(routes.sections.flatMap((section) => section.routes.map((route) => route.id))).toContain("uneven");
+    expect(
+      routes.sections.find((section) => section.id === "more-route-options")?.routes.map((route) => route.id)
+    ).toEqual(["stretched", "uneven"]);
+  });
+
   it("keeps similar routes from crowding out distance variety", () => {
     const routes = planRoutes({
       candidates: [
