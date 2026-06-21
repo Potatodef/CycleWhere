@@ -5,9 +5,8 @@ import type { PlannedRoutes, RoutePlan } from "../src/types.js";
 function makeRoute(id: string, distanceKm: number, fairnessSpreadMinutes: number): RoutePlan {
   return {
     id,
-    zoneId: "zone-a",
-    zoneName: "Zone A",
-    source: "curated",
+    source: "verified-network",
+    origin: "network-endpoint",
     profile: "cycling",
     routeName: id,
     endpointName: `${id} end`,
@@ -21,10 +20,13 @@ function makeRoute(id: string, distanceKm: number, fairnessSpreadMinutes: number
       fallbackSuggested: false
     },
     geometry: [],
+    sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+    sourceFeatureIds: ["cycling-path-1"],
     distanceKm,
     cyclingMinutes: 30,
     routeQualitySource: "measured",
     overlapSignature: [],
+    cyclingMinutesSource: "onemap",
     averageJourneyHomeMinutes: 20,
     fairnessSpreadMinutes,
     fairnessStdDeviationMinutes: 4,
@@ -32,15 +34,16 @@ function makeRoute(id: string, distanceKm: number, fairnessSpreadMinutes: number
     participantTimes: [],
     majorityFriendly: true,
     confidence: "validated",
-    section: "trusted-matches"
+    fairnessSource: "exact",
+    section: "best-fair-routes"
   };
 }
 
 const plannedRoutes: PlannedRoutes = {
   sections: [
     {
-      id: "trusted-matches",
-      title: "Trusted",
+      id: "best-fair-routes",
+      title: "Best fair routes",
       bestFairnessRouteId: "short-fair",
       routes: [makeRoute("short-fair", 6, 12), makeRoute("long-fair", 14, 18)]
     }

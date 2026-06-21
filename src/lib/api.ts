@@ -87,7 +87,10 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
       candidates: [],
       curatedCandidates: [],
       zoneStatuses: [],
-      liveDiscoveryStatus: "unavailable"
+      liveDiscoveryStatus: "unavailable",
+      networkVersion: "local",
+      nextOffset: null,
+      hasMore: false
     } satisfies DiscoveredRoutesResponse;
   }
 
@@ -97,6 +100,15 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
     });
+    if (response.status === 409) {
+      const payload = (await response.json()) as { networkVersion?: string };
+      const error = new Error("Discovery network version changed.");
+      Object.assign(error, {
+        code: "STALE_NETWORK_VERSION",
+        networkVersion: payload.networkVersion
+      });
+      throw error;
+    }
     const payload = await safeJson<DiscoveredRoutesResponse>(response);
     if (payload) {
       return {
@@ -112,7 +124,10 @@ export async function discoverCyclingRoutes(request: DiscoverRoutesRequest) {
     candidates: [],
     curatedCandidates: [],
     zoneStatuses: [],
-    liveDiscoveryStatus: "unavailable"
+    liveDiscoveryStatus: "unavailable",
+    networkVersion: "unavailable",
+    nextOffset: null,
+    hasMore: false
   } satisfies DiscoveredRoutesResponse;
 }
 

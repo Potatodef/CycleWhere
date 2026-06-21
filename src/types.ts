@@ -44,46 +44,23 @@ export type ResolvedParticipant = ParticipantDraft & {
   anchor: TransportAnchor;
 };
 
-export type PopularityEvidence = {
-  label: string;
-  url: string;
-  reviewedOn: string;
-};
-
-export type CorridorSeed = {
-  id: string;
-  name: string;
-  endpointName: string;
-  endpoint: LatLng;
-  preferredAnchorId: string;
-  basePcnCoverage: number;
-  baseCyclingPathCoverage: number;
-  baseCommonCorridorCoverage: number;
-  baseMixedTrafficMeters: number;
-  evidence: PopularityEvidence[];
-  detours: Array<{
-    id: string;
-    name: string;
-    distanceMultiplier: number;
-    controlPoints: Array<{
-      t: number;
-      perpendicularKm: number;
-    }>;
-  }>;
-};
-
-export type RouteSource = "curated" | "discovered";
+export type RouteSource = "verified-network";
 
 export type RoutingProfile = "cycling" | "walk_discovery";
 
-export type RouteConfidence = "validated" | "aligned" | "novel" | "heuristic-only";
+export type RouteConfidence = "validated" | "aligned" | "heuristic-only";
 
-export type RouteQualitySource = "measured" | "inferred" | "unknown";
+export type RouteQualitySource = "measured";
+
+export type RouteOrigin = "network-endpoint" | "named-route";
+
+export type RouteMinutesSource = "onemap" | "distance-estimate";
+
+export type RouteFairnessSource = "estimated" | "exact";
 
 export type RouteSectionId =
-  | "trusted-matches"
-  | "best-discovered"
-  | "curated-alternatives"
+  | "best-fair-routes"
+  | "more-route-options"
   | "majority-friendly-uneven";
 
 export type LiveDiscoveryStatus = "available" | "partial" | "unavailable";
@@ -101,12 +78,9 @@ export type ZoneDiscoveryStatus = {
 
 export type RouteCandidate = {
   id: string;
-  zoneId: string;
-  zoneName: string;
   source: RouteSource;
+  origin: RouteOrigin;
   profile: RoutingProfile;
-  corridorId?: string;
-  corridorName?: string;
   routeName: string;
   endpointName: string;
   endpoint: LatLng;
@@ -114,19 +88,19 @@ export type RouteCandidate = {
   geometry: LatLng[];
   distanceKm: number;
   cyclingMinutes: number;
+  verifiedCoverage?: number;
   pcnCoverage?: number;
   cyclingPathCoverage?: number;
-  commonCorridorCoverage?: number;
   mixedTrafficMeters?: number;
-  popularityEvidence?: PopularityEvidence[];
+  sourceDatasets: string[];
+  sourceFeatureIds: string[];
   routeQualityScore?: number | null;
   routeQualitySource: RouteQualitySource;
   overlapSignature: string[];
-  discoveryDetails?: {
-    spineEndpointName: string;
-    harvestedIndex: number;
-    fromWalkingSpine: boolean;
-  };
+  officialRouteId?: string;
+  officialRouteName?: string;
+  officialRouteSurface?: "paved" | "mixed";
+  cyclingMinutesSource?: RouteMinutesSource;
 };
 
 export type ParticipantRouteTime = {
@@ -146,8 +120,7 @@ export type RoutePlan = RouteCandidate & {
   participantTimes: ParticipantRouteTime[];
   majorityFriendly: boolean;
   confidence: RouteConfidence;
-  matchedCorridorId?: string;
-  corridorAgreementScore?: number;
+  fairnessSource: RouteFairnessSource;
   section: RouteSectionId;
 };
 
@@ -190,6 +163,8 @@ export type DiscoverRoutesRequest = {
     label: string;
     point: LatLng;
   };
+  offset?: number;
+  networkVersion?: string;
   participants: Array<{
     id: string;
     name: string;
@@ -203,4 +178,69 @@ export type DiscoveredRoutesResponse = {
   curatedCandidates: RouteCandidate[];
   zoneStatuses: ZoneDiscoveryStatus[];
   liveDiscoveryStatus: LiveDiscoveryStatus;
+  networkVersion: string;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
+
+export type VerifiedNetworkKind = "cycling-path" | "park-connector" | "official-route";
+
+export type VerifiedNetworkSegment = {
+  id: string;
+  sourceDataset: string;
+  sourceFeatureId: string;
+  name: string;
+  kind: VerifiedNetworkKind;
+  verifiedOn: string;
+  lengthKm: number;
+  geometry: LatLng[];
+};
+
+export type VerifiedNetworkCandidatePoint = {
+  id: string;
+  point: LatLng;
+  sourceKinds: VerifiedNetworkKind[];
+  nearbyFeatureIds: string[];
+};
+
+export type VerifiedNetworkCoveragePoint = {
+  point: LatLng;
+  kind: VerifiedNetworkKind;
+  sourceDataset: string;
+  sourceFeatureId: string;
+};
+
+export type VerifiedNetworkBusAnchor = {
+  id: string;
+  name: string;
+  point: LatLng;
+};
+
+export type VerifiedNamedRoute = {
+  id: string;
+  name: string;
+  kind: "corridor";
+  surface: "paved" | "mixed";
+  publishedDistanceKm: number;
+  sourceDataset: string;
+  sourceFeatureIds: string[];
+  geometry: LatLng[];
+};
+
+export type VerifiedNetworkDatasetInfo = {
+  name: string;
+  datasetId: string;
+  kind: VerifiedNetworkKind;
+  verifiedOn: string;
+};
+
+export type VerifiedNetworkData = {
+  version: string;
+  sourcePolicy: string;
+  datasets: VerifiedNetworkDatasetInfo[];
+  segments: VerifiedNetworkSegment[];
+  candidatePoints: VerifiedNetworkCandidatePoint[];
+  coveragePoints: VerifiedNetworkCoveragePoint[];
+  busAnchors: VerifiedNetworkBusAnchor[];
+  namedRoutes: VerifiedNamedRoute[];
 };

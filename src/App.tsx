@@ -2,18 +2,20 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, type CSSPropertie
 import { railStationSeeds, snapMeetupPointToLand } from "./lib/anchors.js";
 import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
 import { filterPlannedRoutes } from "./lib/routeFilters.js";
+import { findExactStation, getStationRecommendations } from "./lib/stations.js";
 import {
   discoverCyclingRoutes,
   geocodeQueries,
   fetchTransitTimes,
   resolveParticipants
 } from "./lib/api.js";
-import { buildTransitQueries, generateCuratedCandidates } from "./lib/planner.js";
+import { buildTransitQueries } from "./lib/planner.js";
 import type {
   LiveDiscoveryStatus,
   LocationResolution,
   PlannedRoutes,
   ResolvedParticipant,
+  RouteFairnessSource,
   RouteCandidate,
   RoutePlan,
   RouteSection,
@@ -36,6 +38,12 @@ type WorkerRequest = {
 type WorkerResponse =
   | { ok: true; plannedRoutes: PlannedRoutes }
   | { ok: false; error: string };
+
+type PlanningSession = WorkerRequest & {
+  networkVersion: string;
+  nextOffset: number | null;
+  hasMore: boolean;
+};
 
 const RouteMap = lazy(async () => {
   const module = await import("./components/RouteMap.js");
@@ -127,62 +135,15 @@ const initialParticipants: ParticipantInput[] = [
 const distanceFilterOptions = [0, 5, 10, 15, 20];
 const spreadFilterOptions = [0, 10, 20, 30, 45];
 
-const stationSuggestions = railStationSeeds.map((station) => station.name);
-
-function normalizeStationQuery(query: string) {
-  return query
-    .toLowerCase()
-    .replace(/[()/]/g, " ")
-    .replace(/\b(?:mrt|lrt|station)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function findExactStation(query: string) {
-  const normalized = normalizeStationQuery(query);
-  if (!normalized) {
-    return null;
-  }
-
-  return railStationSeeds.find((station) => normalizeStationQuery(station.name) === normalized) ?? null;
-}
-
-function getStationRecommendations(query: string) {
-  const normalized = normalizeStationQuery(query);
-  if (!normalized) {
-    return stationSuggestions.slice(0, 8);
-  }
-
-  const ranked = railStationSeeds
-    .map((station) => {
-      const stationName = normalizeStationQuery(station.name);
-      const startsWith = stationName.startsWith(normalized);
-      const includes = stationName.includes(normalized);
-
-      if (!startsWith && !includes) {
-        return null;
-      }
-
-      return {
-        name: station.name,
-        score: startsWith ? 0 : stationName.indexOf(normalized) + 1
-      };
-    })
-    .filter((item): item is { name: string; score: number } => Boolean(item))
-    .sort((left, right) => left.score - right.score || left.name.localeCompare(right.name));
-
-  return ranked.slice(0, 8).map((item) => item.name);
-}
-
 function formatCoverage(value?: number) {
   return value === undefined ? "n/a" : `${Math.round(value * 100)}%`;
 }
 
 function hasCoverageDetails(route: RoutePlan) {
   return (
+    route.verifiedCoverage !== undefined ||
     route.pcnCoverage !== undefined ||
-    route.cyclingPathCoverage !== undefined ||
-    route.commonCorridorCoverage !== undefined
+    route.cyclingPathCoverage !== undefined
   );
 }
 
@@ -211,12 +172,19 @@ function buildGoogleMapsRouteUrl(
   start: { lat: number; lng: number },
   route: RoutePlan
 ) {
+  if (route.origin === "named-route") {
+    return null;
+  }
   const url = new URL("https://www.google.com/maps/dir/");
   url.searchParams.set("api", "1");
   url.searchParams.set("origin", `${start.lat},${start.lng}`);
   url.searchParams.set("destination", `${route.endpoint.lat},${route.endpoint.lng}`);
   url.searchParams.set("travelmode", "bicycling");
   return url.toString();
+}
+
+function exactCandidateLimit(participantCount: number) {
+  return Math.max(1, Math.min(8, Math.floor(40 / Math.max(participantCount, 1))));
 }
 
 function geolocationErrorMessage(error?: GeolocationPositionError) {
@@ -245,6 +213,20 @@ function nextColorIndex(participants: ParticipantInput[]) {
 
 function fallbackParticipantName(participant: { name: string }, index: number) {
   return participant.name.trim() || `Rider ${index + 1}`;
+}
+
+function buildParticipantDrafts(participants: ParticipantInput[]) {
+  const names = participants.map((participant, index) => fallbackParticipantName(participant, index));
+  const duplicateCounts = names.reduce<Record<string, number>>((counts, name) => {
+    counts[name] = (counts[name] ?? 0) + 1;
+    return counts;
+  }, {});
+
+  return participants.map((participant, index) => ({
+    id: participant.id,
+    name: duplicateCounts[names[index] ?? ""] > 1 ? `${names[index]} (${index + 1})` : names[index] ?? `Rider ${index + 1}`,
+    station: participant.station
+  }));
 }
 
 function hasReliableMeetupResolution(resolution: LocationResolution | null) {
@@ -316,6 +298,8 @@ function RouteCard({
   return (
     <article
       className={`route-card ${selectedRouteId === route.id ? "selected" : ""}`}
+      role="button"
+      aria-pressed={selectedRouteId === route.id}
       onClick={() => onSelect(route.id)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -334,6 +318,9 @@ function RouteCard({
           <p>{routeDirectionLabel(route, startLabel)}</p>
           <div className="chip-row">
             {bestFairnessRouteId === route.id ? <span className="chip">Best fairness in section</span> : null}
+            <span className="chip">{route.fairnessSource === "exact" ? "Exact fairness" : "Estimated fairness"}</span>
+            {route.origin === "named-route" ? <span className="chip">Named official route</span> : null}
+            {route.officialRouteSurface === "mixed" ? <span className="chip">Mixed surface</span> : null}
           </div>
         </div>
         <div className="metric-cluster">
@@ -357,23 +344,27 @@ function RouteCard({
         </div>
         <div>
           <span>Mixed traffic</span>
-          <strong>{route.mixedTrafficMeters !== undefined ? `${route.mixedTrafficMeters} m` : "Live route"}</strong>
+          <strong>{route.mixedTrafficMeters !== undefined ? `${route.mixedTrafficMeters} m` : "n/a"}</strong>
         </div>
       </div>
 
       {hasCoverageDetails(route) ? (
         <div className="chip-row">
+          {route.verifiedCoverage !== undefined ? (
+            <span className="chip">Verified network {formatCoverage(route.verifiedCoverage)}</span>
+          ) : null}
           {route.pcnCoverage !== undefined ? <span className="chip">PCN {formatCoverage(route.pcnCoverage)}</span> : null}
           {route.cyclingPathCoverage !== undefined ? (
             <span className="chip">Cycling path {formatCoverage(route.cyclingPathCoverage)}</span>
           ) : null}
-          {route.commonCorridorCoverage !== undefined ? (
-            <span className="chip">Common corridor {formatCoverage(route.commonCorridorCoverage)}</span>
-          ) : null}
         </div>
       ) : null}
 
-      <div className="route-details" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="route-details"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
         <button
           type="button"
           className="details-toggle"
@@ -422,6 +413,7 @@ export function App() {
   } | null>(null);
   const [resolvedParticipants, setResolvedParticipants] = useState<ResolvedParticipant[]>([]);
   const [results, setResults] = useState<PlannedRoutes | null>(null);
+  const [planningSession, setPlanningSession] = useState<PlanningSession | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [expandedRouteIds, setExpandedRouteIds] = useState<string[]>([]);
   const [showRouteFilters, setShowRouteFilters] = useState(false);
@@ -545,6 +537,7 @@ export function App() {
     setResolvedStart(null);
     setResolvedParticipants([]);
     setResults(null);
+    setPlanningSession(null);
     setSelectedRouteId(null);
     setExpandedRouteIds([]);
   }
@@ -558,6 +551,7 @@ export function App() {
   function resetPlannedState() {
     setResolvedParticipants([]);
     setResults(null);
+    setPlanningSession(null);
     setSelectedRouteId(null);
     setExpandedRouteIds([]);
   }
@@ -603,13 +597,7 @@ export function App() {
   }
 
   async function resolveInputs(start: LocationResolution) {
-    const people = await resolveParticipants(
-      participants.map((participant, index) => ({
-        id: participant.id,
-        name: fallbackParticipantName(participant, index),
-        station: participant.station
-      }))
-    );
+    const people = await resolveParticipants(buildParticipantDrafts(participants));
     const resolved = {
       start: {
         label: start.label,
@@ -630,18 +618,87 @@ export function App() {
       throw new Error("Resolved start is missing.");
     }
 
-    const people = await resolveParticipants(
-      participants.map((participant, index) => ({
-        id: participant.id,
-        name: fallbackParticipantName(participant, index),
-        station: participant.station
-      }))
-    );
+    const people = await resolveParticipants(buildParticipantDrafts(participants));
 
     setResolvedParticipants(people);
     return {
       start,
       participants: people
+    };
+  }
+
+  async function runPlanner(request: WorkerRequest) {
+    return new Promise<PlannedRoutes>((resolve, reject) => {
+      workerPromiseRef.current = { resolve, reject };
+      worker.postMessage(request satisfies WorkerRequest);
+    });
+  }
+
+  function pickExactCandidateIds(routes: PlannedRoutes, limit: number) {
+    const ids: string[] = [];
+    for (const route of routes.sections.flatMap((section) => section.routes)) {
+      if (route.fairnessSource === "exact") {
+        continue;
+      }
+      if (ids.includes(route.id)) {
+        continue;
+      }
+      ids.push(route.id);
+      if (ids.length >= limit) {
+        break;
+      }
+    }
+    return ids;
+  }
+
+  async function rerankSession(session: PlanningSession, forceExactRouteIds: string[] = []) {
+    const estimatedPlan = await runPlanner(session);
+    const limit = exactCandidateLimit(session.participants.length);
+    const exactIds = Array.from(
+      new Set(forceExactRouteIds.concat(pickExactCandidateIds(estimatedPlan, limit)))
+    ).slice(0, limit);
+
+    if (!getApiBase() || exactIds.length === 0) {
+      return {
+        session,
+        plannedRoutes: estimatedPlan
+      };
+    }
+
+    const exactCandidates = session.candidates.filter((candidate) => exactIds.includes(candidate.id));
+    const transitQueryBundle = buildTransitQueries({
+      candidates: exactCandidates,
+      participants: session.participants,
+      startTimeIso: session.startTimeIso
+    }).filter((item) => session.transitOverrides?.[item.key] === undefined);
+
+    if (transitQueryBundle.length === 0) {
+      return {
+        session,
+        plannedRoutes: estimatedPlan
+      };
+    }
+
+    const transitResults = await fetchTransitTimes(transitQueryBundle.map((item) => item.query));
+    const nextOverrides = {
+      ...(session.transitOverrides ?? {})
+    };
+
+    transitResults.forEach((result, index) => {
+      const key = transitQueryBundle[index]?.key;
+      if (key && typeof result.minutes === "number") {
+        nextOverrides[key] = result.minutes;
+      }
+    });
+
+    const nextSession = {
+      ...session,
+      transitOverrides: nextOverrides
+    };
+
+    return {
+      session: nextSession,
+      plannedRoutes: await runPlanner(nextSession)
     };
   }
 
@@ -696,10 +753,15 @@ export function App() {
     const [startResolution] = trimmedStartQuery && !resolvedStart
       ? await geocodeQueries([trimmedStartQuery])
       : [null];
+    const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
+    const startDate = new Date(startMoment);
     const unresolvedStations = participants
       .filter((participant) => !findExactStation(participant.station))
       .map((participant) => participant.id);
     const hasInvalidMeetup = !resolvedStart && (!trimmedStartQuery || !hasReliableMeetupResolution(startResolution));
+    const hasPastDepartureTime =
+      hasCustomDepartureTime &&
+      (Number.isNaN(startDate.getTime()) || startDate.getTime() < roundToFiveMinutes().getTime());
 
     setInvalidStartQuery(hasInvalidMeetup);
     setStartFieldMessage(
@@ -707,10 +769,12 @@ export function App() {
     );
     setInvalidStationIds(unresolvedStations);
 
-    if (hasInvalidMeetup || unresolvedStations.length > 0) {
+    if (hasInvalidMeetup || unresolvedStations.length > 0 || hasPastDepartureTime) {
       setActiveStationFieldId(unresolvedStations[0] ?? null);
       setMessage(
-        hasInvalidMeetup && unresolvedStations.length > 0
+        hasPastDepartureTime
+          ? "Pick a departure time that is now or later before planning."
+          : hasInvalidMeetup && unresolvedStations.length > 0
           ? "Fix the meetup point and every rider's MRT/LRT station before planning."
           : hasInvalidMeetup
             ? "Fix the meetup point before planning any routes."
@@ -720,90 +784,149 @@ export function App() {
     }
 
     setStatus("planning");
-    setMessage("Comparing curated and discovered routes by fairness first, then route confidence and distance variety.");
+    setMessage("Checking verified Singapore cycling routes, then ranking them by fairness and route quality.");
 
     try {
-      const plannedRoutes = await new Promise<PlannedRoutes>((resolve, reject) => {
       const prepareResolved =
         resolvedStart && resolvedParticipants.length === participants.length
           ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
           : resolvedStart
             ? resolveParticipantsWithKnownStart()
             : resolveInputs(startResolution!);
-
-      const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
-
-        workerPromiseRef.current = { resolve, reject };
-
-      const runPlanning = async () => {
-        const resolved = await prepareResolved;
-        const planningStartIso = new Date(startMoment).toISOString();
-        const discovered = await discoverCyclingRoutes({
-          start: resolved.start,
-          participants: resolved.participants.map((participant) => ({
-            id: participant.id,
-            name: participant.name,
-            station: participant.stationResolution.point,
-            anchor: participant.anchor
-          }))
-        });
-        const curatedCandidates =
-          (discovered.curatedCandidates?.length ?? 0) > 0
-            ? discovered.curatedCandidates
-            : generateCuratedCandidates(resolved.start);
-
-        const candidates = [...curatedCandidates, ...discovered.candidates];
-        const transitQueryBundle = buildTransitQueries({
-          candidates,
-          participants: resolved.participants,
-          startTimeIso: planningStartIso
-        });
-        const transitOverrides: Record<string, number> = {};
-
-        if (getApiBase()) {
-          const transitResults = await fetchTransitTimes(transitQueryBundle.map((item) => item.query));
-          transitResults.forEach((result, index) => {
-            const key = transitQueryBundle[index]?.key;
-            if (key && typeof result.minutes === "number") {
-              transitOverrides[key] = result.minutes;
-            }
-          });
-        }
-
-        worker.postMessage({
-          candidates,
-          participants: resolved.participants,
-          startTimeIso: planningStartIso,
-          transitOverrides,
-          zoneStatuses: discovered.zoneStatuses,
-          liveDiscoveryStatus: discovered.liveDiscoveryStatus
-        } satisfies WorkerRequest);
-      };
-
-        void runPlanning().catch((error) => {
-          workerPromiseRef.current = null;
-          reject(error);
-        });
+      const resolved = await prepareResolved;
+      const planningStartIso = new Date(startMoment).toISOString();
+      const discovered = await discoverCyclingRoutes({
+        start: resolved.start,
+        participants: resolved.participants.map((participant) => ({
+          id: participant.id,
+          name: participant.name,
+          station: participant.stationResolution.point,
+          anchor: participant.anchor
+        })),
+        offset: 0
       });
+      const initialSession = {
+        candidates: discovered.curatedCandidates ?? [],
+        participants: resolved.participants,
+        startTimeIso: planningStartIso,
+        transitOverrides: {},
+        zoneStatuses: discovered.zoneStatuses,
+        liveDiscoveryStatus: discovered.liveDiscoveryStatus,
+        networkVersion: discovered.networkVersion,
+        nextOffset: discovered.nextOffset,
+        hasMore: discovered.hasMore
+      } satisfies PlanningSession;
+      const { session, plannedRoutes } = await rerankSession(initialSession);
 
+      setPlanningSession(session);
       setResults(plannedRoutes);
       setSelectedRouteId(plannedRoutes.sections[0]?.routes[0]?.id ?? null);
       setExpandedRouteIds([]);
       setStatus("idle");
       setMessage(
-        plannedRoutes.liveDiscoveryStatus === "available"
-          ? "Hybrid results ready. Compare the cleaner corridor matches against live route discoveries."
-          : plannedRoutes.liveDiscoveryStatus === "partial"
-            ? "Partial live discovery. Curated routes remain available while some live zone lookups were unavailable."
-            : "Live discovery unavailable. Showing curated corridor routes with fallback estimates where needed."
+        plannedRoutes.sections.length === 0
+          ? "No verified routes were available for that meetup point right now. Try another start or try again."
+          : plannedRoutes.liveDiscoveryStatus === "available"
+            ? "Verified route options ready. Compare the fairest official-network endings."
+            : plannedRoutes.liveDiscoveryStatus === "partial"
+              ? "Partial verified results ready. Some official-network candidates could not be routed right now."
+              : "Verified route discovery is unavailable right now."
       );
-    } catch {
+    } catch (error) {
       workerPromiseRef.current = null;
       setStatus("idle");
+      setPlanningSession(null);
       setResults(null);
       setSelectedRouteId(null);
       setExpandedRouteIds([]);
-      setMessage("Route planning hit an unexpected error. Try the same inputs again.");
+      setMessage(
+        (error as { code?: string })?.code === "STALE_NETWORK_VERSION"
+          ? "The verified network was refreshed while planning. Run the search again."
+          : "Route planning hit an unexpected error. Try the same inputs again."
+      );
+    }
+  }
+
+  async function handleLoadMore() {
+    if (!planningSession || planningSession.nextOffset === null || !resolvedStart) {
+      return;
+    }
+
+    setStatus("planning");
+    setMessage("Loading more official route candidates.");
+
+    try {
+      const discovered = await discoverCyclingRoutes({
+        start: resolvedStart,
+        participants: planningSession.participants.map((participant) => ({
+          id: participant.id,
+          name: participant.name,
+          station: participant.stationResolution.point,
+          anchor: participant.anchor
+        })),
+        offset: planningSession.nextOffset,
+        networkVersion: planningSession.networkVersion
+      });
+      const mergedCandidates = [...planningSession.candidates];
+      for (const candidate of discovered.curatedCandidates ?? []) {
+        if (!mergedCandidates.some((existing) => existing.id === candidate.id)) {
+          mergedCandidates.push(candidate);
+        }
+      }
+
+      const nextSession = {
+        ...planningSession,
+        candidates: mergedCandidates,
+        zoneStatuses: discovered.zoneStatuses,
+        liveDiscoveryStatus: discovered.liveDiscoveryStatus,
+        nextOffset: discovered.nextOffset,
+        hasMore: discovered.hasMore
+      } satisfies PlanningSession;
+      const reranked = await rerankSession(nextSession);
+
+      setPlanningSession(reranked.session);
+      setResults(reranked.plannedRoutes);
+      setStatus("idle");
+      setMessage("Loaded more official route options.");
+    } catch (error) {
+      setStatus("idle");
+      if ((error as { code?: string })?.code === "STALE_NETWORK_VERSION") {
+        setMessage("The verified network changed. Running the route search again.");
+        await handlePlan();
+        return;
+      }
+      setMessage("Loading more routes failed. Try again.");
+    }
+  }
+
+  async function handleSelectRoute(routeId: string) {
+    setSelectedRouteId(routeId);
+
+    if (!results || !planningSession || !getApiBase()) {
+      return;
+    }
+
+    const selected = results.sections
+      .flatMap((section) => section.routes)
+      .find((route) => route.id === routeId);
+
+    if (!selected || selected.fairnessSource === "exact") {
+      return;
+    }
+
+    setStatus("planning");
+    setMessage("Checking exact ride-home times for the selected route.");
+
+    try {
+      const reranked = await rerankSession(planningSession, [routeId]);
+      setPlanningSession(reranked.session);
+      setResults(reranked.plannedRoutes);
+      setSelectedRouteId(routeId);
+      setStatus("idle");
+      setMessage("Selected route refreshed with exact ride-home times.");
+    } catch {
+      setStatus("idle");
+      setMessage("Could not refresh exact ride-home times for that route.");
     }
   }
 
@@ -1022,6 +1145,7 @@ export function App() {
                       <label className="field compact-field">
                         <span>Name</span>
                         <input
+                          maxLength={40}
                           value={participant.name}
                           onChange={(event) => updateParticipant(participant.id, "name", event.target.value)}
                           placeholder={`Rider ${index + 1}`}
@@ -1029,19 +1153,23 @@ export function App() {
                       </label>
                       <label className="field compact-field">
                         <span>MRT station</span>
-                        <div className="field-with-suggestions">
+                        <div
+                          className="field-with-suggestions"
+                          onBlur={(event) => {
+                            if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                              return;
+                            }
+                            setActiveStationFieldId((current) =>
+                              current === participant.id ? null : current
+                            );
+                          }}
+                        >
                           <input
+                            maxLength={60}
                             className={invalidStationIds.includes(participant.id) ? "invalid-input" : undefined}
                             aria-invalid={invalidStationIds.includes(participant.id)}
                             value={participant.station}
                             onFocus={() => setActiveStationFieldId(participant.id)}
-                            onBlur={() => {
-                              window.setTimeout(() => {
-                                setActiveStationFieldId((current) =>
-                                  current === participant.id ? null : current
-                                );
-                              }, 120);
-                            }}
                             onChange={(event) => {
                               updateParticipant(participant.id, "station", event.target.value);
                               setActiveStationFieldId(participant.id);
@@ -1052,7 +1180,7 @@ export function App() {
                             <span className="field-error">Pick one MRT/LRT station from the suggested list.</span>
                           ) : null}
                           {activeStationFieldId === participant.id ? (
-                            <div className="station-suggestions" role="listbox" aria-label={`Suggested stations for rider ${index + 1}`}>
+                            <div className="station-suggestions" aria-label={`Suggested stations for rider ${index + 1}`}>
                               {getStationRecommendations(participant.station).map((stationName) => (
                                 <button
                                   key={stationName}
@@ -1101,7 +1229,7 @@ export function App() {
               <strong>Fairness first.</strong>
               <span>
                 The main score is the difference between the longest and shortest trip home.
-                Standard deviation breaks ties, and corridor confidence only helps later in ranking.
+                Standard deviation breaks ties, then verified-network coverage helps separate close options.
               </span>
             </div>
           </section>
@@ -1152,11 +1280,11 @@ export function App() {
                   ? `Start pinned at ${resolvedStart.label}.`
                   : "Start point will pin once planning resolves the meetup location."}
               </span>
-              <span>Street: Closest to a mainstream road-map look, with clear roads and labels.</span>
+              <span>Map uses a clear street-style base with road and place labels.</span>
               <span>
                 {getApiBase()
-                  ? "Backend endpoints configured."
-                  : "Running with local fallback geocoding and transit estimates until the API is configured."}
+                  ? "Using live route and transit services."
+                  : "Using local fallback estimates until live route services are connected."}
               </span>
               {googleMapsRouteUrl ? (
                 <a href={googleMapsRouteUrl} target="_blank" rel="noreferrer" className="map-link">
@@ -1185,31 +1313,34 @@ export function App() {
                   </div>
                 </div>
 
-                {filteredResults?.sections.length ? filteredResults.sections.map((section: RouteSection) => (
+                {totalRouteCount === 0 ? (
+                  <div className="empty-filter-state">
+                    <strong>No verified routes are available for that meetup point right now.</strong>
+                    <span>Try another start point, or try again when the routing service is available.</span>
+                  </div>
+                ) : filteredResults?.sections.length ? filteredResults.sections.map((section: RouteSection) => (
                   <div key={section.id} className="results-stack">
                     <div className="participants-header">
                       <div>
                         <h3>{section.title}</h3>
                         <p>
-                          {section.id === "trusted-matches"
-                            ? "These are the cleanest overall options once fairness and route quality are combined."
-                            : section.id === "best-discovered"
-                              ? "More balanced picks if you want another reasonable ending point."
-                              : section.id === "curated-alternatives"
-                                ? "Useful backups when you want a different distance or finish."
-                                : "These only appear for larger groups when most riders stay close together but one rider stretches the trip home."}
+                          {section.id === "best-fair-routes"
+                            ? "These have exact ride-home checks and the strongest fairness after route quality is applied."
+                            : section.id === "more-route-options"
+                              ? "Useful backups when you want a different distance or finish. Estimated fairness stays here until exact checks run."
+                              : "These only appear for larger groups when most riders stay close together but one rider stretches the trip home."}
                         </p>
                       </div>
                     </div>
                     {section.routes.map((route) => (
                       <RouteCard
                         key={route.id}
-                      route={route}
-                      startLabel={resolvedStart?.label}
-                      bestFairnessRouteId={section.bestFairnessRouteId}
-                      selectedRouteId={selectedRouteId}
-                      expanded={expandedRouteIds.includes(route.id)}
-                        onSelect={setSelectedRouteId}
+                        route={route}
+                        startLabel={resolvedStart?.label}
+                        bestFairnessRouteId={section.bestFairnessRouteId}
+                        selectedRouteId={selectedRouteId}
+                        expanded={expandedRouteIds.includes(route.id)}
+                        onSelect={handleSelectRoute}
                         onToggleDetails={toggleRouteDetails}
                       />
                     ))}
@@ -1223,6 +1354,21 @@ export function App() {
                     </button>
                   </div>
                 )}
+                {planningSession?.hasMore ? (
+                  <div className="results-toolbar">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleLoadMore}
+                      disabled={status !== "idle"}
+                    >
+                      {status === "planning" ? "Loading..." : "Load more routes"}
+                    </button>
+                    <div className="results-toolbar-copy">
+                      <span>Fetch the next page of official-network candidates and rerank them.</span>
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : (
               <p className="placeholder-copy">

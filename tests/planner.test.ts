@@ -1,6 +1,6 @@
 import { classifyFairness, majorityFriendlySpread, spread } from "../src/lib/fairness.js";
-import { buildTransitQueries, generateCuratedCandidates, planRoutes } from "../src/lib/planner.js";
-import type { ResolvedParticipant, RouteCandidate, ZoneDiscoveryStatus } from "../src/types.js";
+import { buildTransitQueries, planRoutes } from "../src/lib/planner.js";
+import type { ResolvedParticipant, RouteCandidate } from "../src/types.js";
 
 function participant(id: string, name: string, lat: number, lng: number): ResolvedParticipant {
   return {
@@ -25,8 +25,41 @@ function participant(id: string, name: string, lat: number, lng: number): Resolv
   };
 }
 
-function flattenRoutes(sections: { routes: RouteCandidate[] }[]) {
-  return sections.flatMap((section) => section.routes);
+function routeCandidate(overrides: Partial<RouteCandidate> = {}): RouteCandidate {
+  return {
+    id: overrides.id ?? "route-a",
+    source: "verified-network",
+    origin: overrides.origin ?? "network-endpoint",
+    profile: "cycling",
+    routeName: overrides.routeName ?? "Verified route",
+    endpointName: overrides.endpointName ?? "Verified endpoint",
+    endpoint: overrides.endpoint ?? { lat: 1.31, lng: 103.88 },
+    endpointAnchor: overrides.endpointAnchor ?? {
+      id: "anchor-a",
+      name: "Bedok MRT",
+      kind: "rail",
+      point: { lat: 1.31, lng: 103.88 },
+      distanceFromHomeKm: 0.1,
+      fallbackSuggested: false
+    },
+    geometry: overrides.geometry ?? [
+      { lat: 1.2808, lng: 103.8545 },
+      { lat: 1.295, lng: 103.87 },
+      { lat: 1.31, lng: 103.88 }
+    ],
+    distanceKm: overrides.distanceKm ?? 6.4,
+    cyclingMinutes: overrides.cyclingMinutes ?? 24,
+    verifiedCoverage: overrides.verifiedCoverage ?? 0.82,
+    pcnCoverage: overrides.pcnCoverage ?? 0.44,
+    cyclingPathCoverage: overrides.cyclingPathCoverage ?? 0.3,
+    mixedTrafficMeters: overrides.mixedTrafficMeters ?? 180,
+    sourceDatasets: overrides.sourceDatasets ?? ["d_8f468b25193f64be8a16fa7d8f60f553"],
+    sourceFeatureIds: overrides.sourceFeatureIds ?? ["cycling-path-1"],
+    routeQualityScore: overrides.routeQualityScore ?? 74,
+    routeQualitySource: "measured",
+    overlapSignature: overrides.overlapSignature ?? ["a->b", "b->c"],
+    cyclingMinutesSource: overrides.cyclingMinutesSource ?? "onemap"
+  };
 }
 
 describe("fairness", () => {
@@ -46,59 +79,22 @@ describe("fairness", () => {
 });
 
 describe("planner", () => {
-  const start = { label: "Marina Bay", point: { lat: 1.2808, lng: 103.8545 } };
-
-  it("returns sectioned curated routes sorted by mileage with mixed traffic limited", () => {
-    const candidates = generateCuratedCandidates(start);
-    const routes = planRoutes({
-      candidates,
-      participants: [
-        participant("a", "A", 1.3249, 103.9303),
-        participant("b", "B", 1.3532, 103.944),
-        participant("c", "C", 1.3714, 103.893)
-      ],
-      startTimeIso: "2026-06-18T18:30:00.000Z",
-      liveDiscoveryStatus: "unavailable"
-    });
-
-    expect(routes.sections.length).toBeGreaterThan(0);
-    const firstSection = routes.sections[0];
-    const distances = firstSection.routes.map((route) => route.distanceKm);
-    expect([...distances].sort((a, b) => a - b)).toEqual(distances);
-    expect(flattenRoutes(routes.sections).every((route) => (route.mixedTrafficMeters ?? 0) <= 250)).toBe(
-      true
-    );
-  });
-
-  it("builds transit queries for curated and discovered candidates together", () => {
-    const curated = generateCuratedCandidates(start);
-    const discovered: RouteCandidate = {
-      id: "discovered-1",
-      zoneId: "east",
-      zoneName: "East corridor",
-      source: "discovered",
-      profile: "cycling",
-      routeName: "Live discovered route",
-      endpointName: "Waypoint",
-      endpoint: { lat: 1.31, lng: 103.9 },
-      endpointAnchor: {
-        id: "bus-anchor",
-        name: "Bus Anchor",
-        kind: "bus",
-        point: { lat: 1.309, lng: 103.901 },
-        distanceFromHomeKm: 0.2,
-        fallbackSuggested: false
-      },
-      geometry: [start.point, { lat: 1.295, lng: 103.88 }, { lat: 1.31, lng: 103.9 }],
-      distanceKm: 6.4,
-      cyclingMinutes: 24,
-      routeQualityScore: null,
-      routeQualitySource: "unknown",
-      overlapSignature: ["a->b"]
-    };
-
+  it("builds transit queries for verified-network candidates", () => {
     const queries = buildTransitQueries({
-      candidates: [...curated.slice(0, 1), discovered],
+      candidates: [
+        routeCandidate(),
+        routeCandidate({
+          id: "bus-route",
+          endpointAnchor: {
+            id: "bus-anchor",
+            name: "Bus stop",
+            kind: "bus",
+            point: { lat: 1.309, lng: 103.901 },
+            distanceFromHomeKm: 0.2,
+            fallbackSuggested: false
+          }
+        })
+      ],
       participants: [participant("a", "A", 1.3249, 103.9303)],
       startTimeIso: "2026-06-18T18:30:00.000Z"
     });
@@ -107,85 +103,73 @@ describe("planner", () => {
     expect(queries[1]?.query.modeHint).toBe("rail");
   });
 
-  it("surfaces trusted corridor matches ahead of curated alternatives when discovery aligns", () => {
-    const curated = generateCuratedCandidates(start);
-    const match = curated[0]!;
+  it("surfaces the fairest verified routes first", () => {
     const routes = planRoutes({
       candidates: [
-        match,
-        {
-          ...match,
-          id: "match-discovered",
-          source: "discovered",
-          routeName: "Live discovered route",
-          routeQualityScore: null,
-          routeQualitySource: "unknown",
-          popularityEvidence: undefined,
-          mixedTrafficMeters: undefined,
-          pcnCoverage: undefined,
-          cyclingPathCoverage: undefined,
-          commonCorridorCoverage: undefined
-        }
+        routeCandidate({
+          id: "best",
+          verifiedCoverage: 0.9,
+          pcnCoverage: 0.55,
+          cyclingPathCoverage: 0.2
+        }),
+        routeCandidate({
+          id: "backup",
+          verifiedCoverage: 0.7,
+          pcnCoverage: 0.25,
+          cyclingPathCoverage: 0.15,
+          distanceKm: 9.2,
+          cyclingMinutes: 34
+        })
       ],
       participants: [
-        participant("north", "North", 1.39, 103.85),
-        participant("south", "South", 1.31, 103.85),
-        participant("east", "East", 1.35, 103.9),
-        participant("center", "Center", 1.35, 103.848)
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
       ],
-      startTimeIso: "2026-06-18T09:00:00.000Z",
-      zoneStatuses: [
-        {
-          zoneId: match.zoneId,
-          zoneName: match.zoneName,
-          status: "available",
-          usedProfile: "cycling",
-          candidateCount: 1
-        } satisfies ZoneDiscoveryStatus
-      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      transitOverrides: {
+        "best::a": 20,
+        "best::b": 22,
+        "best::c": 24,
+        "backup::a": 26,
+        "backup::b": 28,
+        "backup::c": 31
+      },
       liveDiscoveryStatus: "available"
     });
 
-    expect(routes.sections[0]?.id).toBe("trusted-matches");
-    expect(routes.sections[0]?.routes[0]?.matchedCorridorId).toBe(match.corridorId);
+    expect(routes.sections[0]?.id).toBe("best-fair-routes");
+    expect(routes.sections[0]?.routes[0]?.id).toBe("best");
   });
 
-  it("drops low-agreement live variants when the trusted corridor is not materially worse", () => {
-    const curated = generateCuratedCandidates(start);
-    const trusted = curated[0]!;
+  it("keeps similar routes from crowding out distance variety", () => {
     const routes = planRoutes({
       candidates: [
-        trusted,
-        {
-          ...trusted,
-          id: "weak-live-variant",
-          source: "discovered",
-          routeName: "Weak live variant",
-          routeQualityScore: null,
-          routeQualitySource: "unknown",
-          overlapSignature: ["far->away"],
-          popularityEvidence: undefined,
-          mixedTrafficMeters: undefined,
-          pcnCoverage: undefined,
-          cyclingPathCoverage: undefined,
-          commonCorridorCoverage: undefined
-        }
+        routeCandidate({ id: "route-1", overlapSignature: ["a", "b", "c"], distanceKm: 8 }),
+        routeCandidate({ id: "route-2", overlapSignature: ["a", "b", "c"], distanceKm: 8.4 }),
+        routeCandidate({ id: "route-3", overlapSignature: ["x", "y", "z"], distanceKm: 14 })
       ],
       participants: [
-        participant("north", "North", 1.39, 103.85),
-        participant("south", "South", 1.31, 103.85),
-        participant("east", "East", 1.35, 103.9)
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
       ],
-      startTimeIso: "2026-06-18T09:00:00.000Z",
+      startTimeIso: "2026-06-18T18:30:00.000Z",
       liveDiscoveryStatus: "available"
     });
 
-    expect(flattenRoutes(routes.sections).some((route) => route.id === "weak-live-variant")).toBe(false);
+    const ids = routes.sections.flatMap((section) => section.routes.map((route) => route.id));
+    expect(ids).toContain("route-1");
+    expect(ids).not.toContain("route-2");
+    expect(ids).toContain("route-3");
   });
 
   it("can surface uneven majority-friendly routes for clustered homes plus one outlier", () => {
     const routes = planRoutes({
-      candidates: generateCuratedCandidates(start),
+      candidates: [
+        routeCandidate({ id: "route-a", distanceKm: 6, cyclingMinutes: 20 }),
+        routeCandidate({ id: "route-b", distanceKm: 18, cyclingMinutes: 62 })
+      ],
       participants: [
         participant("a", "A", 1.3249, 103.9303),
         participant("b", "B", 1.3255, 103.931),
@@ -194,7 +178,7 @@ describe("planner", () => {
         participant("e", "E", 1.4362, 103.7862)
       ],
       startTimeIso: "2026-06-18T18:30:00.000Z",
-      liveDiscoveryStatus: "unavailable"
+      liveDiscoveryStatus: "available"
     });
 
     const unevenSection = routes.sections.find((section) => section.id === "majority-friendly-uneven");

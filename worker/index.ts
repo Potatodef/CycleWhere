@@ -14,8 +14,7 @@ import { discoverCyclingRoutes } from "./discovery.js";
 import {
   fetchRouteWithOneMap,
   fetchTransitTimeWithOneMap,
-  geocodeManyWithOneMap,
-  getNearbyTransportWithOneMap
+  geocodeManyWithOneMap
 } from "./providers/onemap.js";
 
 type Bindings = {
@@ -28,7 +27,7 @@ type Bindings = {
 
 export const app = new Hono<{ Bindings: Bindings }>();
 const MAX_GEOCODE_QUERIES = 12;
-const MAX_TRANSIT_QUERIES = 120;
+const MAX_TRANSIT_QUERIES = 40;
 const MAX_PARTICIPANTS = 10;
 
 function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
@@ -93,7 +92,7 @@ async function setCachedTransit(
 
 async function getCachedJson(
   database: D1Database | undefined,
-  tableName: "route_cache" | "nearby_transport_cache",
+  tableName: "route_cache",
   key: string
 ) {
   if (!database) {
@@ -110,7 +109,7 @@ async function getCachedJson(
 
 async function setCachedJson(
   database: D1Database | undefined,
-  tableName: "route_cache" | "nearby_transport_cache",
+  tableName: "route_cache",
   key: string,
   payload: unknown
 ) {
@@ -207,12 +206,16 @@ app.post("/api/discover-cycling-routes", async (context) => {
   if (payload.participants.length === 0 || payload.participants.length > MAX_PARTICIPANTS) {
     return context.json({ error: "Invalid participant count." }, 400);
   }
+  if (payload.networkVersion && payload.networkVersion !== networkManifest.version) {
+    return context.json({ error: "Network version changed.", networkVersion: networkManifest.version }, 409);
+  }
 
   try {
     const result = await discoverCyclingRoutes(payload, {
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
-          version: 2,
+          version: 3,
+          networkVersion: networkManifest.version,
           profile,
           start: roundedKey(start),
           end: roundedKey(end)
@@ -227,26 +230,6 @@ app.post("/api/discover-cycling-routes", async (context) => {
           await setCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey, route);
         }
         return route;
-      },
-      getNearbyTransport: async (point) => {
-        const cacheKey = roundedKey(point);
-        const cached = await getCachedJson(
-          context.env.TRANSIT_CACHE,
-          "nearby_transport_cache",
-          cacheKey
-        );
-        if (cached) {
-          return cached;
-        }
-
-        const nearby = await getNearbyTransportWithOneMap(point, context.env);
-        await setCachedJson(
-          context.env.TRANSIT_CACHE,
-          "nearby_transport_cache",
-          cacheKey,
-          nearby
-        );
-        return nearby;
       }
     });
 
@@ -257,7 +240,10 @@ app.post("/api/discover-cycling-routes", async (context) => {
       candidates: [],
       curatedCandidates: [],
       zoneStatuses: [],
-      liveDiscoveryStatus: "unavailable"
+      liveDiscoveryStatus: "unavailable",
+      networkVersion: networkManifest.version,
+      nextOffset: null,
+      hasMore: false
     });
   }
 });

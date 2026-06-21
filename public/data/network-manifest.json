@@ -1,42 +1,40 @@
 {
-  "version": "2026-06-18",
+  "version": "2026-06-21",
   "datasets": [
     {
       "name": "LTA Cycling Path Network",
       "datasetId": "d_8f468b25193f64be8a16fa7d8f60f553",
-      "reviewedOn": "2026-06-18",
-      "purpose": "Cycling infrastructure"
-    },
-    {
-      "name": "NParks Tracks",
-      "datasetId": "d_306cc1018cb733346681883ee6d73054",
-      "reviewedOn": "2026-06-18",
-      "purpose": "Park tracks with cycling allowances"
+      "kind": "cycling-path",
+      "verifiedOn": "2026-06-21"
     },
     {
       "name": "Park Connector Loop",
       "datasetId": "d_a69ef89737379f231d2ae93fd1c5707f",
-      "reviewedOn": "2026-06-18",
-      "purpose": "Named park connector loops"
+      "kind": "park-connector",
+      "verifiedOn": "2026-06-21"
     },
     {
-      "name": "MRT Station Exit",
-      "datasetId": "d_b39d3a0871985372d7e1637193335da5",
-      "reviewedOn": "2026-06-18",
-      "purpose": "Transit anchor snapping"
+      "name": "Round Island Route",
+      "datasetId": "nparks:park-connector-trails:round-island-route",
+      "kind": "official-route",
+      "verifiedOn": "2026-06-21"
     },
     {
-      "name": "Bus Stop",
-      "datasetId": "d_3f172c6feb3f4f92a2f47d93eed2908a",
-      "reviewedOn": "2026-06-18",
-      "purpose": "Bus fallback anchors"
+      "name": "Rail Corridor",
+      "datasetId": "nparks:park-connector-trails:rail-corridor",
+      "kind": "official-route",
+      "verifiedOn": "2026-06-21"
+    },
+    {
+      "name": "Eastern Corridor",
+      "datasetId": "nparks:park-connector-trails:eastern-corridor",
+      "kind": "official-route",
+      "verifiedOn": "2026-06-21"
     }
   ],
-  "corridors": [
-    "Round Island Route",
-    "Eastern Coastal Loop",
-    "North Eastern Riverine Loop",
-    "Jurong-West Coast Green Spine",
-    "Kallang Basin Connector"
-  ]
+  "sourcePolicy": "Official Singapore cycling routes only: LTA cycling paths, NParks park connector loops, selected named official corridors, and LTA bus stops for static anchor checks.",
+  "segmentCount": 1035,
+  "candidatePointCount": 700,
+  "busAnchorCount": 5166,
+  "namedRouteCount": 3
 }

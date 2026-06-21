@@ -1,80 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/data/corridors.js", () => ({
-  corridorSeeds: [
+vi.mock("../src/lib/verifiedNetwork.js", () => ({
+  listVerifiedCandidatePoints: () => [
     {
-      id: "test-corridor",
-      name: "Test corridor",
-      endpointName: "Test endpoint",
-      endpoint: { lat: 1.31, lng: 103.88 },
-      preferredAnchorId: "test-anchor",
-      basePcnCoverage: 0.7,
-      baseCyclingPathCoverage: 0.2,
-      baseCommonCorridorCoverage: 0.8,
-      baseMixedTrafficMeters: 120,
-      evidence: [],
-      detours: [
-        {
-          id: "direct",
-          name: "Direct",
-          distanceMultiplier: 1,
-          controlPoints: []
-        }
-      ]
+      id: "candidate-a",
+      point: { lat: 1.31, lng: 103.88 },
+      sourceKinds: ["cycling-path"],
+      nearbyFeatureIds: ["cycling-path-1"]
     }
-  ]
-}));
-
-vi.mock("../src/data/anchors.js", () => ({
-  anchorSeeds: []
-}));
-
-vi.mock("../src/lib/planner.js", () => ({
-  generateCuratedCandidates: () => [
-    {
-      id: "test-corridor-direct",
-      zoneId: "test-corridor",
-      zoneName: "Test corridor",
-      source: "curated",
-      profile: "cycling",
-      corridorId: "test-corridor",
-      corridorName: "Test corridor",
-      routeName: "Direct",
-      endpointName: "Test endpoint",
-      endpoint: { lat: 1.31, lng: 103.88 },
-      endpointAnchor: {
-        id: "local-anchor",
-        name: "Local anchor",
-        kind: "rail",
-        point: { lat: 1.31, lng: 103.88 },
-        distanceFromHomeKm: 0.1,
-        fallbackSuggested: false
-      },
-      geometry: [
-        { lat: 1.2808, lng: 103.8545 },
-        { lat: 1.31, lng: 103.88 }
-      ],
-      distanceKm: 4.2,
-      cyclingMinutes: 18,
-      pcnCoverage: 0.7,
-      cyclingPathCoverage: 0.2,
-      commonCorridorCoverage: 0.8,
-      mixedTrafficMeters: 120,
-      popularityEvidence: [],
-      routeQualityScore: 65,
-      routeQualitySource: "inferred",
-      overlapSignature: ["a->b"]
-    }
-  ]
+  ],
+  listVerifiedBusAnchors: () => [],
+  listVerifiedNamedRoutes: () => [],
+  getVerifiedNetwork: () => ({ version: "2026-06-21" }),
+  measureRouteCoverage: () => ({
+    verifiedCoverage: 0.81,
+    pcnCoverage: 0.34,
+    cyclingPathCoverage: 0.46,
+    mixedTrafficMeters: 180,
+    sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+    sourceFeatureIds: ["cycling-path-1"]
+  })
 }));
 
 describe("live discovery", () => {
-  it("falls back to the local curated corridor when a live spine exists but cannot form a curated match", async () => {
+  it("returns verified network routes when the route and transport anchor are both valid", async () => {
     const { discoverCyclingRoutes } = await import("../worker/discovery.js");
-    const getNearbyTransport = vi.fn(async () => ({
-      rails: [],
-      buses: []
-    }));
     const fetchRoute = vi.fn(async () => ({
       geometry: [
         { lat: 1.2808, lng: 103.8545 },
@@ -108,15 +58,16 @@ describe("live discovery", () => {
         ]
       },
       {
-        fetchRoute,
-        getNearbyTransport
+        fetchRoute
       }
     );
 
     expect(fetchRoute).toHaveBeenCalledTimes(1);
-    expect(getNearbyTransport).not.toHaveBeenCalled();
+    expect(result.candidates).toHaveLength(0);
     expect(result.curatedCandidates).toHaveLength(1);
+    expect(result.curatedCandidates[0]?.verifiedCoverage).toBeGreaterThanOrEqual(0.55);
     expect(result.zoneStatuses[0]?.status).toBe("available");
     expect(result.liveDiscoveryStatus).toBe("available");
+    expect(result.networkVersion).toBeTruthy();
   });
 });

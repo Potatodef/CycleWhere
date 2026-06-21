@@ -1,5 +1,4 @@
 import { anchorSeeds } from "../src/data/anchors.js";
-import { corridorSeeds } from "../src/data/corridors.js";
 import { findRailStation, railStationSeeds, snapMeetupPointToLand } from "../src/lib/anchors.js";
 import { fallbackResolve } from "../src/lib/geocodeFallback.js";
 
@@ -18,12 +17,8 @@ describe("rail station seeds", () => {
     expect(fallbackResolve("NotARealPlaceZXQ123").confidence).toBe("low");
   });
 
-  it("resolves every corridor preferred anchor id", () => {
-    expect(
-      corridorSeeds.every((corridor) =>
-        anchorSeeds.some((anchor) => anchor.id === corridor.preferredAnchorId)
-      )
-    ).toBe(true);
+  it("keeps the transport anchor list populated", () => {
+    expect(anchorSeeds.length).toBeGreaterThan(0);
   });
 
   it("snaps obviously offshore meetup points to the nearest known land anchor", () => {

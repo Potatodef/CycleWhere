@@ -861,6 +861,11 @@ input:focus-visible {
   background: rgba(255, 255, 255, 0.7);
 }
 
+.participant-time-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 980px) {
   .layout-grid {
     grid-template-columns: 1fr;

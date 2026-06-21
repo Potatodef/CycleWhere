@@ -168,6 +168,27 @@ export function RouteMap({
       return;
     }
 
+    if (typeof ResizeObserver === "undefined" || !containerRef.current) {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      map.resize();
+    });
+
+    observer.observe(containerRef.current);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [mapError]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || mapError) {
+      return;
+    }
+
     const syncMap = () => {
       markersRef.current.forEach((marker) => marker.remove());
       markersRef.current = [];
