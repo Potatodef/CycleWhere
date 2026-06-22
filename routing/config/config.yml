@@ -23,10 +23,11 @@ graphhopper:
     - profile: cyclewhere_official
     - profile: cyclewhere_quiet
     - profile: cyclewhere_bicycle
+  import.osm.ignored_highways: motorway,trunk
   graph.encoded_values: |
     bike_access, bike_average_speed, bike_priority, bike_road_access, bike_network,
     road_class, road_environment, road_access, smoothness, surface, track_type,
-    roundabout, ferry_speed, orientation
+    roundabout, ferry_speed, orientation, mtb_rating, hike_rating, country
 
 server:
   application_connectors:

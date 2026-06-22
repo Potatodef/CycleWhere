@@ -25,6 +25,8 @@ type RouteResponse = {
 };
 
 type DiscoveryDeps = {
+  maxDiscoveryEndpoints?: number;
+  routingProfiles?: RoutingProfile[];
   fetchRoute: (input: {
     start: LatLng;
     end: LatLng;
@@ -268,7 +270,8 @@ function buildGenericCandidate(
 }
 
 async function runJob(job: GenericJob, start: LatLng, deps: DiscoveryDeps) {
-  for (const profile of ROUTING_PROFILES) {
+  const routingProfiles = deps.routingProfiles ?? ROUTING_PROFILES;
+  for (const profile of routingProfiles) {
     const route = await deps.fetchRoute({ start, end: job.point, profile }).catch(() => null);
     if (
       !route ||
@@ -295,7 +298,7 @@ export async function discoverCyclingRoutes(
   );
   // Named source lines are overlays, not physical topology. They may be re-enabled only
   // after import produces continuous, directed GraphHopper edge sequences.
-  const pageJobs = genericJobs.slice(0, MAX_DISCOVERY_ENDPOINTS);
+  const pageJobs = genericJobs.slice(0, deps.maxDiscoveryEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
   const networkVersion = getVerifiedNetwork().version;
 
   if (pageJobs.length === 0) {

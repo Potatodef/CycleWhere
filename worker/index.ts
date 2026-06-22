@@ -35,6 +35,9 @@ type Bindings = {
   ONEMAP_API_PASSWORD?: string;
   ONEMAP_BASE_URL?: string;
   GRAPHHOPPER_BASE_URL?: string;
+  GRAPHHOPPER_API_KEY?: string;
+  // Temporary compatibility for a misnamed secret in production.
+  GRAPHOPPER_API_KEY?: string;
   GRAPHHOPPER_BEARER_TOKEN?: string;
   GRAPHHOPPER_PROFILE_OFFICIAL?: string;
   GRAPHHOPPER_PROFILE_QUIET?: string;
@@ -50,6 +53,10 @@ export const app = new Hono<{ Bindings: Bindings }>();
 const MAX_GEOCODE_QUERIES = 12;
 const MAX_TRANSIT_QUERIES = 40;
 const MAX_PARTICIPANTS = 10;
+
+function hasRoutingProvider(env: Bindings | undefined) {
+  return Boolean(env?.GRAPHHOPPER_BASE_URL || env?.GRAPHHOPPER_API_KEY || env?.GRAPHOPPER_API_KEY);
+}
 
 function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
   const allowlist = configuredOrigins
@@ -154,11 +161,11 @@ app.get("/api/health", (context) =>
   context.json({
     ok: true,
     service: "cyclewhere-api",
-    routingConfigured: Boolean(context.env.GRAPHHOPPER_BASE_URL),
-    graphVersion: context.env.GRAPH_VERSION ?? null,
-    profileHash: context.env.PROFILE_HASH ?? null,
-    overlayHash: context.env.OVERLAY_HASH ?? null,
-    rankingHash: context.env.RANKING_HASH ?? null,
+    routingConfigured: hasRoutingProvider(context.env),
+    graphVersion: context.env?.GRAPH_VERSION ?? null,
+    profileHash: context.env?.PROFILE_HASH ?? null,
+    overlayHash: context.env?.OVERLAY_HASH ?? null,
+    rankingHash: context.env?.RANKING_HASH ?? null,
     timestamp: new Date().toISOString()
   })
 );
@@ -259,7 +266,7 @@ app.post("/api/route-searches", async (context) => {
       503
     );
   }
-  if (!context.env.GRAPHHOPPER_BASE_URL) {
+  if (!hasRoutingProvider(context.env)) {
     return context.json<RouteSearchError>(
       { error: "The routing graph is not available.", code: "routing_unavailable" },
       503
@@ -279,6 +286,8 @@ app.post("/api/route-searches", async (context) => {
       start: { ...payload.start, point: snappedStart.point }
     };
     const result = await discoverCyclingRoutes(normalizedPayload, {
+      routingProfiles: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? ["bicycle"] : undefined,
+      maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
           version: 4,
