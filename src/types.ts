@@ -46,7 +46,12 @@ export type ResolvedParticipant = ParticipantDraft & {
 
 export type RouteSource = "verified-network";
 
-export type RoutingProfile = "cycling" | "walk_discovery";
+export type RoutingProfile =
+  | "official_protected"
+  | "official_quiet"
+  | "bicycle"
+  | "cycling"
+  | "walk_discovery";
 
 export type RouteConfidence = "validated" | "aligned" | "heuristic-only";
 
@@ -78,6 +83,7 @@ export type ZoneDiscoveryStatus = {
 
 export type RouteCandidate = {
   id: string;
+  searchRank?: number;
   source: RouteSource;
   origin: RouteOrigin;
   profile: RoutingProfile;
@@ -86,6 +92,7 @@ export type RouteCandidate = {
   endpoint: LatLng;
   endpointAnchor: TransportAnchor;
   geometry: LatLng[];
+  graphEdgeIds?: string[];
   distanceKm: number;
   cyclingMinutes: number;
   verifiedCoverage?: number;
@@ -158,13 +165,12 @@ export type TransitTimesResponse = {
   results: TransitTimeResult[];
 };
 
-export type DiscoverRoutesRequest = {
+export type RouteSearchRequest = {
   start: {
     label: string;
     point: LatLng;
   };
-  offset?: number;
-  networkVersion?: string;
+  departureIso: string;
   participants: Array<{
     id: string;
     name: string;
@@ -173,14 +179,35 @@ export type DiscoverRoutesRequest = {
   }>;
 };
 
-export type DiscoveredRoutesResponse = {
-  candidates: RouteCandidate[];
-  curatedCandidates: RouteCandidate[];
+export type CandidateEvaluation = {
+  candidateId: string;
+  accepted: boolean;
+  reason?: string;
+};
+
+export type RouteSearchResult = {
+  searchId: string;
+  routes: RouteCandidate[];
   zoneStatuses: ZoneDiscoveryStatus[];
   liveDiscoveryStatus: LiveDiscoveryStatus;
-  networkVersion: string;
-  nextOffset: number | null;
-  hasMore: boolean;
+  graphVersion: string;
+  expiresAt: string;
+  nextPageToken: string | null;
+};
+
+export type RouteSearchPageResult = Omit<RouteSearchResult, "searchId" | "expiresAt"> & {
+  searchId: string;
+  expiresAt: string;
+};
+
+export type RouteSearchErrorCode =
+  | "invalid_meetup"
+  | "routing_unavailable"
+  | "search_expired";
+
+export type RouteSearchError = {
+  error: string;
+  code: RouteSearchErrorCode;
 };
 
 export type VerifiedNetworkKind = "cycling-path" | "park-connector" | "official-route";

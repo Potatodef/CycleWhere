@@ -11,4 +11,8 @@ coverage
 .env.local
 .dev.vars
 .edge-tmp
+routing/bin/
+routing/data/
+routing/graph-cache/
+routing/.tmp-*.yml
 CODEX_HANDOFF.md

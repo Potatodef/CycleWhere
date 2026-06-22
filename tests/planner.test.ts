@@ -101,6 +101,7 @@ describe("planner", () => {
 
     expect(queries).toHaveLength(2);
     expect(queries[1]?.query.modeHint).toBe("rail");
+    expect(queries[0]?.query.departureIso).toBe("2026-06-18T19:04:00.000Z");
   });
 
   it("surfaces the fairest verified routes first", () => {

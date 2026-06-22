@@ -1,35 +1,45 @@
 import { railStationSeeds } from "../src/lib/anchors.js";
-import { haversineKm, polylineDistanceKm } from "../src/lib/geo.js";
+import { haversineKm } from "../src/lib/geo.js";
+import { homewardScore, medianHomeCentre } from "../src/lib/homeward.js";
 import {
   getVerifiedNetwork,
   listVerifiedBusAnchors,
   listVerifiedCandidatePoints,
-  listVerifiedNamedRoutes,
   measureRouteCoverage
 } from "../src/lib/verifiedNetwork.js";
 import type {
-  DiscoverRoutesRequest,
-  DiscoveredRoutesResponse,
+  CandidateEvaluation,
   LatLng,
   RouteCandidate,
+  RouteSearchRequest,
   RoutingProfile,
   TransportAnchor,
-  VerifiedNamedRoute,
   ZoneDiscoveryStatus
 } from "../src/types.js";
 
 type RouteResponse = {
   geometry: LatLng[];
+  graphEdgeIds?: string[];
   distanceKm: number;
   durationMinutes: number;
 };
 
 type DiscoveryDeps = {
+  maxDiscoveryEndpoints?: number;
+  routingProfiles?: RoutingProfile[];
   fetchRoute: (input: {
     start: LatLng;
     end: LatLng;
     profile: RoutingProfile;
   }) => Promise<RouteResponse | null>;
+};
+
+export type DiscoveryResult = {
+  routes: RouteCandidate[];
+  diagnostics: CandidateEvaluation[];
+  zoneStatuses: ZoneDiscoveryStatus[];
+  liveDiscoveryStatus: "available" | "unavailable";
+  graphVersion: string;
 };
 
 type GenericJob = {
@@ -39,26 +49,13 @@ type GenericJob = {
   nearbyFeatureIds: string[];
 };
 
-type NamedRouteJob = {
-  type: "named";
-  id: string;
-  route: VerifiedNamedRoute;
-  entryPoint: LatLng;
-  endpoint: LatLng;
-  straightLineDistanceKm: number;
-};
-
-type DiscoveryJob = GenericJob | NamedRouteJob;
-
-const MIN_ROUTE_DISTANCE_KM = 3;
+const MIN_ROUTE_DISTANCE_KM = 5;
 const MAX_GENERIC_DISTANCE_KM = 35;
-const GENERIC_PAGE_SIZE = 20;
+const MAX_DISCOVERY_ENDPOINTS = 18;
 const DISCOVERY_BATCH_SIZE = 5;
 const VERIFIED_COVERAGE_MINIMUM = 0.55;
 const MIXED_TRAFFIC_MAXIMUM = 1200;
-const NAMED_ROUTE_ENTRY_MAX_KM = 5;
-const NAMED_ROUTE_ACCESS_MAX_KM = 8;
-const NAMED_ROUTE_TARGETS_KM = [10, 20, 35];
+const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 
 function routeSignature(points: LatLng[]) {
   const signature = [];
@@ -139,19 +136,17 @@ function sectorIndex(start: LatLng, end: LatLng) {
 }
 
 function distanceBandIndex(distanceKm: number) {
-  if (distanceKm < 8) {
+  if (distanceKm < 10) {
     return 0;
   }
-  if (distanceKm < 15) {
+  if (distanceKm < 20) {
     return 1;
   }
-  if (distanceKm < 25) {
-    return 2;
-  }
-  return 3;
+  return 2;
 }
 
-function buildGenericJobs(start: LatLng): GenericJob[] {
+function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
+  const homeCentre = medianHomeCentre(riderAnchors);
   const groups = new Map<string, Array<{ point: LatLng; id: string; nearbyFeatureIds: string[]; distanceKm: number }>>();
 
   for (const candidatePoint of listVerifiedCandidatePoints()) {
@@ -204,56 +199,17 @@ function buildGenericJobs(start: LatLng): GenericJob[] {
     }
   }
 
-  return ordered;
-}
-
-function buildNamedRouteJobs(start: LatLng): NamedRouteJob[] {
-  return listVerifiedNamedRoutes()
-    .map((route) => {
-      const firstPoint = route.geometry[0];
-      const lastPoint = route.geometry[route.geometry.length - 1];
-      const firstDistanceKm = haversineKm(start, firstPoint);
-      const lastDistanceKm = haversineKm(start, lastPoint);
-      const useFirst = firstDistanceKm <= lastDistanceKm;
-      return {
-        type: "named" as const,
-        id: route.id,
-        route,
-        entryPoint: useFirst ? firstPoint : lastPoint,
-        endpoint: useFirst ? lastPoint : firstPoint,
-        straightLineDistanceKm: Math.min(firstDistanceKm, lastDistanceKm)
-      };
-    })
-    .filter((job) => job.straightLineDistanceKm <= NAMED_ROUTE_ENTRY_MAX_KM)
-    .sort(
-      (left, right) =>
-        left.straightLineDistanceKm - right.straightLineDistanceKm || left.route.id.localeCompare(right.route.id)
+  return ordered.sort((left, right) => {
+    const leftScore = homewardScore(start, left.point, homeCentre);
+    const rightScore = homewardScore(start, right.point, homeCentre);
+    const leftHomeward = leftScore >= -0.1 ? 0 : 1;
+    const rightHomeward = rightScore >= -0.1 ? 0 : 1;
+    return (
+      leftHomeward - rightHomeward ||
+      haversineKm(left.point, homeCentre) - haversineKm(right.point, homeCentre) ||
+      left.id.localeCompare(right.id)
     );
-}
-
-function interleaveJobs(genericJobs: GenericJob[], namedJobs: NamedRouteJob[]) {
-  const jobs: DiscoveryJob[] = [];
-  let genericIndex = 0;
-  let namedIndex = 0;
-
-  while (genericIndex < genericJobs.length || namedIndex < namedJobs.length) {
-    for (let count = 0; count < 2 && genericIndex < genericJobs.length; count += 1) {
-      jobs.push(genericJobs[genericIndex]);
-      genericIndex += 1;
-    }
-
-    if (namedIndex < namedJobs.length) {
-      jobs.push(namedJobs[namedIndex]);
-      namedIndex += 1;
-    }
-
-    if (genericIndex >= genericJobs.length && namedIndex < namedJobs.length) {
-      jobs.push(...namedJobs.slice(namedIndex));
-      break;
-    }
-  }
-
-  return jobs;
+  });
 }
 
 function qualityGate(geometry: LatLng[]) {
@@ -266,14 +222,19 @@ function qualityGate(geometry: LatLng[]) {
   };
 }
 
-function buildGenericCandidate(job: GenericJob, route: RouteResponse) {
+function buildGenericCandidate(
+  job: GenericJob,
+  route: RouteResponse,
+  profile: RoutingProfile,
+  requireOfficialCoverage = true
+) {
   const endpointAnchor = nearestEligibleAnchor(job.point);
   if (!endpointAnchor.eligible || !endpointAnchor.anchor) {
     return null;
   }
 
   const { coverage, eligible } = qualityGate(route.geometry);
-  if (!eligible) {
+  if (requireOfficialCoverage && !eligible) {
     return null;
   }
 
@@ -281,12 +242,13 @@ function buildGenericCandidate(job: GenericJob, route: RouteResponse) {
     id: job.id,
     source: "verified-network",
     origin: "network-endpoint",
-    profile: "cycling",
+    profile,
     routeName: `${endpointAnchor.anchor.name} verified route`,
     endpointName: endpointAnchor.anchor.name,
     endpoint: job.point,
     endpointAnchor: endpointAnchor.anchor,
     geometry: route.geometry,
+    graphEdgeIds: route.graphEdgeIds,
     distanceKm: route.distanceKm,
     cyclingMinutes: route.durationMinutes,
     verifiedCoverage: coverage.verifiedCoverage,
@@ -307,167 +269,42 @@ function buildGenericCandidate(job: GenericJob, route: RouteResponse) {
   return candidate;
 }
 
-function slicePolyline(points: LatLng[], maxDistanceKm: number) {
-  if (points.length < 2) {
-    return points.slice();
-  }
-
-  const sliced = [points[0]];
-  let coveredKm = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    const segmentStart = points[index - 1];
-    const segmentEnd = points[index];
-    const segmentDistanceKm = haversineKm(segmentStart, segmentEnd);
-
-    if (coveredKm + segmentDistanceKm <= maxDistanceKm) {
-      sliced.push(segmentEnd);
-      coveredKm += segmentDistanceKm;
+async function runJob(job: GenericJob, start: LatLng, deps: DiscoveryDeps) {
+  const routingProfiles = deps.routingProfiles ?? ROUTING_PROFILES;
+  for (const profile of routingProfiles) {
+    const route = await deps.fetchRoute({ start, end: job.point, profile }).catch(() => null);
+    if (
+      !route ||
+      route.distanceKm < MIN_ROUTE_DISTANCE_KM ||
+      route.distanceKm > MAX_GENERIC_DISTANCE_KM
+    ) {
       continue;
     }
-
-    const remainingKm = maxDistanceKm - coveredKm;
-    if (remainingKm > 0 && segmentDistanceKm > 0) {
-      const ratio = remainingKm / segmentDistanceKm;
-      sliced.push({
-        lat: segmentStart.lat + (segmentEnd.lat - segmentStart.lat) * ratio,
-        lng: segmentStart.lng + (segmentEnd.lng - segmentStart.lng) * ratio
-      });
+    const candidate = buildGenericCandidate(job, route, profile);
+    if (candidate) {
+      return [candidate];
     }
-    return sliced;
   }
-
-  return sliced;
-}
-
-function joinGeometry(accessGeometry: LatLng[], routeGeometry: LatLng[]) {
-  if (accessGeometry.length === 0) {
-    return routeGeometry.slice();
-  }
-  if (routeGeometry.length === 0) {
-    return accessGeometry.slice();
-  }
-
-  const accessEnd = accessGeometry[accessGeometry.length - 1];
-  const routeStart = routeGeometry[0];
-  const routeTail =
-    haversineKm(accessEnd, routeStart) <= 0.05 ? routeGeometry.slice(1) : routeGeometry.slice();
-  return accessGeometry.concat(routeTail);
-}
-
-function estimateNamedRouteMinutes(routeDistanceKm: number, surface: "paved" | "mixed") {
-  const speedKmPerHour = surface === "mixed" ? 10 : 16;
-  return Math.max(1, Math.round((routeDistanceKm / speedKmPerHour) * 60));
-}
-
-function buildNamedCandidates(job: NamedRouteJob, accessRoute: RouteResponse) {
-  const accessQuality = qualityGate(accessRoute.geometry);
-  if (!accessQuality.eligible || accessRoute.distanceKm > NAMED_ROUTE_ACCESS_MAX_KM) {
-    return [];
-  }
-
-  const orientedGeometry =
-    haversineKm(job.entryPoint, job.route.geometry[0]) <= haversineKm(job.entryPoint, job.route.geometry[job.route.geometry.length - 1])
-      ? job.route.geometry
-      : job.route.geometry.slice().reverse();
-  const routeDistanceKm = polylineDistanceKm(orientedGeometry);
-  const targetDistances = NAMED_ROUTE_TARGETS_KM.filter(
-    (distanceKm) => distanceKm < routeDistanceKm && distanceKm >= MIN_ROUTE_DISTANCE_KM
-  ).concat(routeDistanceKm);
-
-  return targetDistances.flatMap((targetDistanceKm) => {
-    const routePortion = slicePolyline(orientedGeometry, targetDistanceKm);
-    const geometry = joinGeometry(accessRoute.geometry, routePortion);
-    const endpoint = geometry[geometry.length - 1];
-    const endpointAnchor = nearestEligibleAnchor(endpoint);
-    if (!endpointAnchor.eligible || !endpointAnchor.anchor) {
-      return [];
-    }
-
-    const coverage = measureRouteCoverage(geometry);
-    const candidate: RouteCandidate = {
-      id: `${job.route.id}-${Math.round(targetDistanceKm * 10)}`,
-      source: "verified-network",
-      origin: "named-route",
-      profile: "cycling",
-      routeName:
-        Math.abs(targetDistanceKm - routeDistanceKm) < 0.2
-          ? job.route.name
-          : `${job.route.name} ${Math.round(targetDistanceKm)} km section`,
-      endpointName:
-        Math.abs(targetDistanceKm - routeDistanceKm) < 0.2
-          ? job.route.name
-          : `${job.route.name} ${Math.round(targetDistanceKm)} km section`,
-      endpoint,
-      endpointAnchor: endpointAnchor.anchor,
-      geometry,
-      distanceKm: Math.round((accessRoute.distanceKm + polylineDistanceKm(routePortion)) * 10) / 10,
-      cyclingMinutes:
-        accessRoute.durationMinutes + estimateNamedRouteMinutes(polylineDistanceKm(routePortion), job.route.surface),
-      verifiedCoverage: coverage.verifiedCoverage,
-      pcnCoverage: coverage.pcnCoverage,
-      cyclingPathCoverage: coverage.cyclingPathCoverage,
-      mixedTrafficMeters: coverage.mixedTrafficMeters,
-      sourceDatasets: [...new Set(coverage.sourceDatasets.concat(job.route.sourceDataset))].sort(),
-      sourceFeatureIds: [...new Set(coverage.sourceFeatureIds.concat(job.route.sourceFeatureIds))].sort(),
-      routeQualityScore: null,
-      routeQualitySource: "measured",
-      overlapSignature: routeSignature(geometry),
-      officialRouteId: job.route.id,
-      officialRouteName: job.route.name,
-      officialRouteSurface: job.route.surface,
-      cyclingMinutesSource: "distance-estimate"
-    };
-
-    candidate.routeQualityScore = routeQualityScore(candidate);
-    return candidate;
-  });
-}
-
-async function runJob(job: DiscoveryJob, start: LatLng, deps: DiscoveryDeps) {
-  if (job.type === "generic") {
-    const route = await deps
-      .fetchRoute({
-        start,
-        end: job.point,
-        profile: "cycling"
-      })
-      .catch(() => null);
-    if (!route || route.distanceKm < MIN_ROUTE_DISTANCE_KM) {
-      return [];
-    }
-    const candidate = buildGenericCandidate(job, route);
-    return candidate ? [candidate] : [];
-  }
-
-  const accessRoute = await deps
-    .fetchRoute({
-      start,
-      end: job.entryPoint,
-      profile: "cycling"
-    })
-    .catch(() => null);
-  if (!accessRoute) {
-    return [];
-  }
-
-  return buildNamedCandidates(job, accessRoute);
+  return [];
 }
 
 export async function discoverCyclingRoutes(
-  request: DiscoverRoutesRequest,
+  request: RouteSearchRequest,
   deps: DiscoveryDeps
-): Promise<DiscoveredRoutesResponse> {
-  const genericJobs = buildGenericJobs(request.start.point);
-  const namedJobs = buildNamedRouteJobs(request.start.point);
-  const allJobs = interleaveJobs(genericJobs, namedJobs);
-  const offset = Math.max(0, request.offset ?? 0);
-  const pageJobs = allJobs.slice(offset, offset + GENERIC_PAGE_SIZE);
+): Promise<DiscoveryResult> {
+  const genericJobs = buildGenericJobs(
+    request.start.point,
+    request.participants.map((participant) => participant.anchor.point)
+  );
+  // Named source lines are overlays, not physical topology. They may be re-enabled only
+  // after import produces continuous, directed GraphHopper edge sequences.
+  const pageJobs = genericJobs.slice(0, deps.maxDiscoveryEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
   const networkVersion = getVerifiedNetwork().version;
 
   if (pageJobs.length === 0) {
     return {
-      candidates: [],
-      curatedCandidates: [],
+      routes: [],
+      diagnostics: [],
       zoneStatuses: [
         {
           zoneId: "verified-network",
@@ -479,14 +316,12 @@ export async function discoverCyclingRoutes(
         } satisfies ZoneDiscoveryStatus
       ],
       liveDiscoveryStatus: "unavailable",
-      networkVersion,
-      nextOffset: null,
-      hasMore: false
+      graphVersion: networkVersion
     };
   }
 
-  const curatedCandidates: RouteCandidate[] = [];
-  let failedCount = 0;
+  const routes: RouteCandidate[] = [];
+  const diagnostics: CandidateEvaluation[] = [];
 
   for (let index = 0; index < pageJobs.length; index += DISCOVERY_BATCH_SIZE) {
     const batch = pageJobs.slice(index, index + DISCOVERY_BATCH_SIZE);
@@ -494,52 +329,63 @@ export async function discoverCyclingRoutes(
       batch.map(async (job) => {
         const candidates = await runJob(job, request.start.point, deps);
         if (candidates.length === 0) {
-          failedCount += 1;
+          diagnostics.push({ candidateId: job.id, accepted: false, reason: "route_or_quality_gate" });
+        } else {
+          diagnostics.push(...candidates.map((candidate) => ({ candidateId: candidate.id, accepted: true })));
         }
         return candidates;
       })
     );
 
     for (const result of batchResults) {
-      curatedCandidates.push(...result);
+      routes.push(...result);
     }
   }
 
-  const liveDiscoveryStatus =
-    curatedCandidates.length === 0
-      ? "unavailable"
-      : failedCount === 0
-        ? "available"
-        : "partial";
-  const hasMore = offset + pageJobs.length < allJobs.length;
+  if (routes.length === 0) {
+    const attempted = new Set(pageJobs.map((job) => job.id));
+    for (const job of genericJobs) {
+      if (attempted.has(job.id) || !nearestEligibleAnchor(job.point).eligible) {
+        continue;
+      }
+      const route = await deps
+        .fetchRoute({ start: request.start.point, end: job.point, profile: "bicycle" })
+        .catch(() => null);
+      if (!route || route.distanceKm < MIN_ROUTE_DISTANCE_KM || route.distanceKm > MAX_GENERIC_DISTANCE_KM) {
+        continue;
+      }
+      const fallback = buildGenericCandidate(job, route, "bicycle", false);
+      if (fallback) {
+        routes.push(fallback);
+        diagnostics.push({ candidateId: fallback.id, accepted: true, reason: "all_bicycle_fallback" });
+        break;
+      }
+    }
+  }
+
+  const liveDiscoveryStatus = routes.length === 0 ? "unavailable" : "available";
 
   return {
-    candidates: [],
-    curatedCandidates: curatedCandidates.sort(
+    routes: routes.sort(
       (left, right) =>
         (right.routeQualityScore ?? 0) - (left.routeQualityScore ?? 0) || left.distanceKm - right.distanceKm
     ),
+    diagnostics,
     zoneStatuses: [
       {
         zoneId: "verified-network",
         zoneName: "Verified network",
         status:
-          liveDiscoveryStatus === "available"
-            ? "available"
-            : liveDiscoveryStatus === "partial"
-              ? "partial"
-              : "unavailable",
+          liveDiscoveryStatus,
         usedProfile: "cycling",
-        candidateCount: curatedCandidates.length,
+        candidateCount: routes.length,
         reason:
-          curatedCandidates.length === 0
+          routes.length === 0
             ? "No routed candidates stayed on the verified cycling network strongly enough."
             : undefined
       } satisfies ZoneDiscoveryStatus
     ],
     liveDiscoveryStatus,
-    networkVersion,
-    nextOffset: hasMore ? offset + pageJobs.length : null,
-    hasMore
+    graphVersion: networkVersion
   };
 }

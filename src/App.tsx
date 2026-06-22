@@ -4,9 +4,10 @@ import { formatIsoLocal, roundToFiveMinutes } from "./lib/geo.js";
 import { filterPlannedRoutes } from "./lib/routeFilters.js";
 import { findExactStation, getStationRecommendations } from "./lib/stations.js";
 import {
-  discoverCyclingRoutes,
+  createRouteSearch,
   geocodeQueries,
   fetchTransitTimes,
+  loadRouteSearchPage,
   resolveParticipants
 } from "./lib/api.js";
 import { buildTransitQueries } from "./lib/planner.js";
@@ -40,9 +41,10 @@ type WorkerResponse =
   | { ok: false; error: string };
 
 type PlanningSession = WorkerRequest & {
-  networkVersion: string;
-  nextOffset: number | null;
-  hasMore: boolean;
+  graphVersion: string;
+  nextPageToken: string | null;
+  searchId: string;
+  expiresAt: string;
 };
 
 const RouteMap = lazy(async () => {
@@ -810,26 +812,27 @@ export function App() {
             : resolveInputs(startResolution!);
       const resolved = await prepareResolved;
       const planningStartIso = new Date(startMoment).toISOString();
-      const discovered = await discoverCyclingRoutes({
+      const discovered = await createRouteSearch({
         start: resolved.start,
+        departureIso: planningStartIso,
         participants: resolved.participants.map((participant) => ({
           id: participant.id,
           name: participant.name,
           station: participant.stationResolution.point,
           anchor: participant.anchor
-        })),
-        offset: 0
+        }))
       });
       const initialSession = {
-        candidates: discovered.curatedCandidates ?? [],
+        candidates: discovered.routes,
         participants: resolved.participants,
         startTimeIso: planningStartIso,
         transitOverrides: {},
         zoneStatuses: discovered.zoneStatuses,
         liveDiscoveryStatus: discovered.liveDiscoveryStatus,
-        networkVersion: discovered.networkVersion,
-        nextOffset: discovered.nextOffset,
-        hasMore: discovered.hasMore
+        graphVersion: discovered.graphVersion,
+        nextPageToken: discovered.nextPageToken,
+        searchId: discovered.searchId,
+        expiresAt: discovered.expiresAt
       } satisfies PlanningSession;
       const { session, plannedRoutes } = await rerankSession(initialSession);
 
@@ -855,15 +858,17 @@ export function App() {
       setSelectedRouteId(null);
       setExpandedRouteIds([]);
       setMessage(
-        (error as { code?: string })?.code === "STALE_NETWORK_VERSION"
-          ? "The verified network was refreshed while planning. Run the search again."
-          : "Route planning hit an unexpected error. Try the same inputs again."
+        (error as { code?: string })?.code === "invalid_meetup"
+          ? "That meetup point cannot safely connect to the cycling network. Pick another nearby location."
+          : (error as { code?: string })?.code === "routing_unavailable"
+            ? "The cycling graph is unavailable right now. Try again shortly."
+            : "Route planning hit an unexpected error. Try the same inputs again."
       );
     }
   }
 
   async function handleLoadMore() {
-    if (!planningSession || planningSession.nextOffset === null || !resolvedStart) {
+    if (!planningSession?.nextPageToken) {
       return;
     }
 
@@ -871,19 +876,9 @@ export function App() {
     setMessage("Loading more official route candidates.");
 
     try {
-      const discovered = await discoverCyclingRoutes({
-        start: resolvedStart,
-        participants: planningSession.participants.map((participant) => ({
-          id: participant.id,
-          name: participant.name,
-          station: participant.stationResolution.point,
-          anchor: participant.anchor
-        })),
-        offset: planningSession.nextOffset,
-        networkVersion: planningSession.networkVersion
-      });
+      const discovered = await loadRouteSearchPage(planningSession.nextPageToken);
       const mergedCandidates = [...planningSession.candidates];
-      for (const candidate of discovered.curatedCandidates ?? []) {
+      for (const candidate of discovered.routes) {
         if (!mergedCandidates.some((existing) => existing.id === candidate.id)) {
           mergedCandidates.push(candidate);
         }
@@ -894,8 +889,7 @@ export function App() {
         candidates: mergedCandidates,
         zoneStatuses: discovered.zoneStatuses,
         liveDiscoveryStatus: discovered.liveDiscoveryStatus,
-        nextOffset: discovered.nextOffset,
-        hasMore: discovered.hasMore
+        nextPageToken: discovered.nextPageToken
       } satisfies PlanningSession;
       const reranked = await rerankSession(nextSession);
 
@@ -905,12 +899,11 @@ export function App() {
       setMessage("Loaded more official route options.");
     } catch (error) {
       setStatus("idle");
-      if ((error as { code?: string })?.code === "STALE_NETWORK_VERSION") {
-        setMessage("The verified network changed. Running the route search again.");
-        await handlePlan();
-        return;
-      }
-      setMessage("Loading more routes failed. Try again.");
+      setMessage(
+        (error as { code?: string })?.code === "search_expired"
+          ? "This route search expired. Plan again to refresh the results."
+          : "Loading more routes failed. Try again."
+      );
     }
   }
 
@@ -1374,7 +1367,7 @@ export function App() {
                     </button>
                   </div>
                 )}
-                {planningSession?.hasMore ? (
+                {planningSession?.nextPageToken ? (
                   <div className="results-toolbar">
                     <button
                       type="button"
