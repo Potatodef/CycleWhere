@@ -913,6 +913,12 @@ input:focus-visible {
     width: 100%;
   }
 
+  .station-suggestions {
+    position: static;
+    margin-top: 8px;
+    max-height: 38dvh;
+  }
+
   .results-toolbar-copy {
     width: 100%;
   }

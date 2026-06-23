@@ -38,7 +38,7 @@ export type DiscoveryResult = {
   routes: RouteCandidate[];
   diagnostics: CandidateEvaluation[];
   zoneStatuses: ZoneDiscoveryStatus[];
-  liveDiscoveryStatus: "available" | "unavailable";
+  liveDiscoveryStatus: "available" | "partial" | "unavailable";
   graphVersion: string;
 };
 
@@ -363,7 +363,12 @@ export async function discoverCyclingRoutes(
     }
   }
 
-  const liveDiscoveryStatus = routes.length === 0 ? "unavailable" : "available";
+  const liveDiscoveryStatus =
+    routes.length === 0
+      ? "unavailable"
+      : diagnostics.some((diagnostic) => !diagnostic.accepted)
+        ? "partial"
+        : "available";
 
   return {
     routes: routes.sort(
