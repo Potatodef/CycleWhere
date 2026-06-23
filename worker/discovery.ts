@@ -26,6 +26,7 @@ type RouteResponse = {
 
 type DiscoveryDeps = {
   maxDiscoveryEndpoints?: number;
+  maxFallbackEndpoints?: number;
   routingProfiles?: RoutingProfile[];
   fetchRoute: (input: {
     start: LatLng;
@@ -344,10 +345,11 @@ export async function discoverCyclingRoutes(
 
   if (routes.length === 0) {
     const attempted = new Set(pageJobs.map((job) => job.id));
-    for (const job of genericJobs) {
-      if (attempted.has(job.id) || !nearestEligibleAnchor(job.point).eligible) {
-        continue;
-      }
+    const fallbackJobs = genericJobs
+      .filter((job) => !attempted.has(job.id) && nearestEligibleAnchor(job.point).eligible)
+      .slice(0, deps.maxFallbackEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
+
+    for (const job of fallbackJobs) {
       const route = await deps
         .fetchRoute({ start: request.start.point, end: job.point, profile: "bicycle" })
         .catch(() => null);

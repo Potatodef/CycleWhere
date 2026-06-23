@@ -296,6 +296,8 @@ app.post("/api/route-searches", async (context) => {
     };
     const result = await discoverCyclingRoutes(normalizedPayload, {
       routingProfiles: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? ["bicycle"] : undefined,
+      maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
+      maxFallbackEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 4 : undefined,
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
           version: 4,
@@ -304,24 +306,27 @@ app.post("/api/route-searches", async (context) => {
           start: roundedKey(start),
           end: roundedKey(end)
         });
-        const cached = await getCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey);
+        let cached = null;
+        try {
+          cached = await getCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey);
+        } catch (error) {
+          console.error("Route cache read failed", error);
+        }
         if (cached) {
           return cached;
         }
 
         const route = await fetchRouteWithGraphHopper({ start, end, profile }, context.env);
         if (route) {
-          await setCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey, route);
+          try {
+            await setCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey, route);
+          } catch (error) {
+            console.error("Route cache write failed", error);
+          }
         }
         return route;
       }
     });
-    if (result.routes.length === 0) {
-      return context.json<RouteSearchError>(
-        { error: "No reachable route was produced by the routing graph.", code: "routing_unavailable" },
-        503
-      );
-    }
 
     const searchId = crypto.randomUUID();
     const expiresAt = newSearchExpiry();
@@ -376,7 +381,11 @@ app.post("/api/route-searches", async (context) => {
       zoneStatuses: result.zoneStatuses,
       liveDiscoveryStatus: result.liveDiscoveryStatus
     };
-    await storeRouteSearch(context.env.TRANSIT_CACHE, search);
+    try {
+      await storeRouteSearch(context.env.TRANSIT_CACHE, search);
+    } catch (error) {
+      console.error("Route search session write failed", error);
+    }
     return context.json<RouteSearchResult>(
       await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET)
     );

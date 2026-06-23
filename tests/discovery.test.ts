@@ -128,4 +128,44 @@ describe("live discovery", () => {
     expect(result.zoneStatuses[0]?.status).toBe("partial");
     expect(result.liveDiscoveryStatus).toBe("partial");
   });
+
+  it("caps fallback routing attempts when first-page candidates fail", async () => {
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async () => null);
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        maxFallbackEndpoints: 0,
+        routingProfiles: ["bicycle"],
+        fetchRoute
+      }
+    );
+
+    expect(fetchRoute).toHaveBeenCalledTimes(1);
+    expect(result.routes).toHaveLength(0);
+    expect(result.liveDiscoveryStatus).toBe("unavailable");
+  });
 });

@@ -135,6 +135,29 @@ describe("GraphHopper route provenance", () => {
     ]);
   });
 
+  it("treats hosted no-path responses as an unroutable candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ message: "Cannot find point" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHHOPPER_API_KEY: "test-key" }
+      )
+    ).resolves.toBeNull();
+  });
+
   it("skips explicit nearest snapping in hosted API mode", async () => {
     const snapped = await snapMeetupWithGraphHopper(
       { lat: 1.3, lng: 103.8 },

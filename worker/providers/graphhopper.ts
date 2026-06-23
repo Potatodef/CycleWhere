@@ -108,6 +108,9 @@ export async function fetchRouteWithGraphHopper(
 
     const response = await fetch(`https://graphhopper.com/api/1/route?${params.toString()}`);
     if (!response.ok) {
+      if (response.status === 400 || response.status === 404) {
+        return null;
+      }
       throw new Error(`GraphHopper hosted route failed with ${response.status}.`);
     }
     const payload = (await response.json()) as GraphHopperResponse;
