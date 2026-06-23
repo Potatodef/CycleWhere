@@ -12,7 +12,7 @@ export type LocationResolution = {
   label: string;
   point: LatLng;
   confidence: "high" | "medium" | "low";
-  source: "onemap" | "fallback";
+  source: "onemap" | "fallback" | "geolocation";
 };
 
 export type TransportMode = "rail" | "bus";

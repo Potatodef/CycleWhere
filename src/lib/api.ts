@@ -14,12 +14,35 @@ import type {
   TransitTimesResponse
 } from "../types.js";
 
-const apiBase =
-  (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
-  (window as Window & {
-    __CYCLEWHERE_CONFIG__?: { apiBase?: string };
-  }).__CYCLEWHERE_CONFIG__?.apiBase ??
-  "";
+const PRODUCTION_API_BASE = "https://cyclewhere-api-production.cyclewhere.workers.dev";
+
+export function getApiBase() {
+  const configured =
+    (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ||
+    (window as Window & {
+      __CYCLEWHERE_CONFIG__?: { apiBase?: string };
+    }).__CYCLEWHERE_CONFIG__?.apiBase;
+  const isLocalProxy =
+    configured === "/proxy-api" && !["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+  return configured && !isLocalProxy ? configured : PRODUCTION_API_BASE;
+}
+
+const apiBase = getApiBase();
+
+function routeSearchError(message: string, code = "routing_unavailable", status?: number) {
+  const error = new Error(message);
+  Object.assign(error, { code, status });
+  return error;
+}
+
+async function routeJson<T>(response: Response) {
+  try {
+    return (await response.json()) as T | RouteSearchError;
+  } catch {
+    throw routeSearchError("Route search returned an unreadable response.", "routing_unavailable", response.status);
+  }
+}
 
 function normalizeResolutionLabel(result: LocationResolution): LocationResolution {
   const label = result.label.trim();
@@ -38,6 +61,15 @@ async function safeJson<T>(response: Response): Promise<T | null> {
     return null;
   }
   return (await response.json()) as T;
+}
+
+async function routeSearchResponse<T>(response: Response) {
+  const payload = await routeJson<T>(response);
+  if (!response.ok) {
+    const routeError = payload as RouteSearchError;
+    throw routeSearchError(routeError.error || "Route search failed.", routeError.code, response.status);
+  }
+  return payload as T;
 }
 
 export async function geocodeQueries(queries: string[]) {
@@ -81,17 +113,6 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
     minutes: estimateTransitMinutes(query),
     source: "estimate"
   }));
-}
-
-async function routeSearchResponse<T>(response: Response) {
-  const payload = (await response.json()) as T | RouteSearchError;
-  if (!response.ok) {
-    const routeError = payload as RouteSearchError;
-    const error = new Error(routeError.error || "Route search failed.");
-    Object.assign(error, { code: routeError.code, status: response.status });
-    throw error;
-  }
-  return payload as T;
 }
 
 export async function createRouteSearch(request: RouteSearchRequest) {

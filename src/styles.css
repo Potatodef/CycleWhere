@@ -522,7 +522,7 @@ input:focus-visible {
   z-index: 20;
   display: grid;
   gap: 6px;
-  max-height: 220px;
+  max-height: min(220px, 42dvh);
   padding: 8px;
   overflow-y: auto;
   border: 1px solid var(--line);
@@ -643,6 +643,24 @@ input:focus-visible {
 
 .map-loading {
   min-height: 430px;
+}
+
+.route-loading-skeleton {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.route-loading-skeleton span {
+  height: 82px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: linear-gradient(
+    90deg,
+    var(--surface-strong),
+    color-mix(in srgb, var(--brand) 8%, var(--surface-strong) 92%),
+    var(--surface-strong)
+  );
 }
 
 .map-fallback-copy {
@@ -885,9 +903,14 @@ input:focus-visible {
   }
 
   .results-toolbar,
+  .action-row,
   .filter-sheet-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .action-row button {
+    width: 100%;
   }
 
   .results-toolbar-copy {

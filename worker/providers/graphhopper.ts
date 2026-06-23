@@ -101,8 +101,7 @@ export async function fetchRouteWithGraphHopper(
       profile: routeProfile(env, input.profile),
       points_encoded: "false",
       instructions: "false",
-      elevation: "false",
-      details: "edge_id"
+      elevation: "false"
     });
     params.append("point", `${input.start.lat},${input.start.lng}`);
     params.append("point", `${input.end.lat},${input.end.lng}`);
@@ -117,12 +116,9 @@ export async function fetchRouteWithGraphHopper(
       return null;
     }
     const graphEdgeIds = path.details?.edge_id?.map((detail) => String(detail[2])) ?? [];
-    if (graphEdgeIds.length === 0) {
-      throw new Error("GraphHopper hosted route did not include edge provenance.");
-    }
     return {
       geometry: path.points.coordinates.map(([lng, lat]) => ({ lat, lng })),
-      graphEdgeIds,
+      graphEdgeIds: graphEdgeIds.length ? graphEdgeIds : undefined,
       distanceKm: path.distance / 1000,
       durationMinutes: Math.max(1, Math.round(path.time / 60000))
     };

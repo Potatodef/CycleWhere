@@ -96,7 +96,43 @@ describe("GraphHopper route provenance", () => {
     expect(`${requestedUrl.origin}${requestedUrl.pathname}`).toBe("https://graphhopper.com/api/1/route");
     expect(requestedUrl.searchParams.get("key")).toBe("test-key");
     expect(requestedUrl.searchParams.get("profile")).toBe("bike");
+    expect(requestedUrl.searchParams.has("details")).toBe(false);
     expect(requestedUrl.searchParams.getAll("point")).toEqual(["1.3,103.8", "1.34,103.85"]);
+  });
+
+  it("accepts hosted routes without self-hosted graph edge IDs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            paths: [
+              {
+                distance: 6200,
+                time: 1_500_000,
+                points: { coordinates: [[103.8, 1.3], [103.85, 1.34]] }
+              }
+            ]
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    const route = await fetchRouteWithGraphHopper(
+      {
+        start: { lat: 1.3, lng: 103.8 },
+        end: { lat: 1.34, lng: 103.85 },
+        profile: "bicycle"
+      },
+      { GRAPHHOPPER_API_KEY: "test-key" }
+    );
+
+    expect(route?.graphEdgeIds).toBeUndefined();
+    expect(route?.geometry).toEqual([
+      { lat: 1.3, lng: 103.8 },
+      { lat: 1.34, lng: 103.85 }
+    ]);
   });
 
   it("skips explicit nearest snapping in hosted API mode", async () => {

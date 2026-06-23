@@ -1,5 +1,6 @@
-import { classifyFairness, majorityFriendlySpread, spread } from "../src/lib/fairness.js";
+import { classifyFairness, majorityFriendlySpread, spread, standardDeviation } from "../src/lib/fairness.js";
 import { buildTransitQueries, planRoutes } from "../src/lib/planner.js";
+import { estimateTransitMinutes } from "../src/lib/transit.js";
 import type { ResolvedParticipant, RouteCandidate } from "../src/types.js";
 
 function participant(id: string, name: string, lat: number, lng: number): ResolvedParticipant {
@@ -76,6 +77,10 @@ describe("fairness", () => {
     expect(majorityFriendlySpread([20, 21, 22, 60])).toBe(true);
     expect(majorityFriendlySpread([20, 21, 60])).toBe(false);
   });
+
+  it("uses sample standard deviation", () => {
+    expect(standardDeviation([2, 4, 4, 4, 5, 5, 7, 9])).toBeCloseTo(2.138, 3);
+  });
 });
 
 describe("planner", () => {
@@ -102,6 +107,19 @@ describe("planner", () => {
     expect(queries).toHaveLength(2);
     expect(queries[1]?.query.modeHint).toBe("rail");
     expect(queries[0]?.query.departureIso).toBe("2026-06-18T19:04:00.000Z");
+  });
+
+  it("keeps transit keys distinct when candidate ids collide", () => {
+    const queries = buildTransitQueries({
+      candidates: [
+        routeCandidate({ id: "same", cyclingMinutes: 10 }),
+        routeCandidate({ id: "same", cyclingMinutes: 20 })
+      ],
+      participants: [participant("a", "A", 1.3249, 103.9303)],
+      startTimeIso: "2026-06-18T18:30:00.000Z"
+    });
+
+    expect(new Set(queries.map((query) => query.key)).size).toBe(2);
   });
 
   it("surfaces the fairest verified routes first", () => {
@@ -231,5 +249,21 @@ describe("planner", () => {
     const valuesNearCenter = [12, 18, 40, 4];
     const alternative = [18, 24, 26, 21];
     expect(spread(valuesNearCenter)).toBeGreaterThan(spread(alternative));
+  });
+});
+
+describe("transit estimates", () => {
+  it("applies peak-hour penalties in Singapore time", () => {
+    const query = {
+      from: { lat: 1.3, lng: 103.8 },
+      to: { lat: 1.36, lng: 103.9 },
+      modeHint: "rail" as const
+    };
+
+    expect(
+      estimateTransitMinutes({ ...query, departureIso: "2026-06-18T10:30:00.000Z" })
+    ).toBe(
+      estimateTransitMinutes({ ...query, departureIso: "2026-06-18T03:00:00.000Z" }) + 6
+    );
   });
 });

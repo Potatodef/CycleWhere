@@ -61,7 +61,28 @@ function overlapRatio(a: string[], b: string[]) {
   return intersection / union;
 }
 
-function routeTransitKey(routeId: string, participantId: string) {
+function routeTransitKey({
+  candidate,
+  participant,
+  transitFrom,
+  departureIso
+}: {
+  candidate: RouteCandidate;
+  participant: ResolvedParticipant;
+  transitFrom: { lat: number; lng: number };
+  departureIso: string;
+}) {
+  return [
+    candidate.id,
+    participant.id,
+    `${transitFrom.lat.toFixed(5)},${transitFrom.lng.toFixed(5)}`,
+    `${participant.anchor.point.lat.toFixed(5)},${participant.anchor.point.lng.toFixed(5)}`,
+    participant.anchor.kind,
+    departureIso
+  ].join("::");
+}
+
+function legacyRouteTransitKey(routeId: string, participantId: string) {
   return `${routeId}::${participantId}`;
 }
 
@@ -92,7 +113,7 @@ function confidenceRank(coverage = 0) {
 }
 
 function fairnessBandRank(spreadMinutes: number) {
-  return spreadMinutes <= 20 ? 0 : spreadMinutes <= 30 ? 1 : 2;
+  return spreadMinutes < 10 ? 0 : spreadMinutes < 20 ? 1 : spreadMinutes <= 30 ? 2 : 3;
 }
 
 function compareRoutes(a: RoutePlan, b: RoutePlan) {
@@ -182,7 +203,7 @@ function toFairnessSection(route: RoutePlan): RouteSectionId {
   if (route.fairnessSpreadMinutes > 30 && route.majorityFriendly) {
     return "majority-friendly-uneven";
   }
-  return route.fairnessSpreadMinutes <= 20 ? "best-fair-routes" : "more-route-options";
+  return route.fairnessSpreadMinutes < 20 ? "best-fair-routes" : "more-route-options";
 }
 
 function buildSection(id: RouteSectionId, title: string, routes: RoutePlan[]): RouteSection {
@@ -216,7 +237,12 @@ export function buildTransitQueries({
 
     for (const participant of participants) {
       queries.push({
-        key: routeTransitKey(candidate.id, participant.id),
+        key: routeTransitKey({
+          candidate,
+          participant,
+          transitFrom,
+          departureIso
+        }),
         query: {
           from: transitFrom,
           to: participant.anchor.point,
@@ -245,9 +271,16 @@ function scoreCandidates({
     const transitFrom = transitOriginPoint(candidate);
 
     const participantTimes = participants.map((participant) => {
-      const transitKey = routeTransitKey(candidate.id, participant.id);
+      const transitKey = routeTransitKey({
+        candidate,
+        participant,
+        transitFrom,
+        departureIso
+      });
+      const legacyTransitKey = legacyRouteTransitKey(candidate.id, participant.id);
       const transitMinutes =
         transitOverrides?.[transitKey] ??
+        transitOverrides?.[legacyTransitKey] ??
         estimateTransitMinutesBetween(
           transitFrom,
           participant.anchor.point,
@@ -266,7 +299,16 @@ function scoreCandidates({
     const times = participantTimes.map((participant) => participant.transitMinutes);
     const verifiedCoverage = candidate.verifiedCoverage ?? 0;
     const fairnessSource = participants.every(
-      (participant) => transitOverrides?.[routeTransitKey(candidate.id, participant.id)] !== undefined
+      (participant) =>
+        (transitOverrides?.[
+          routeTransitKey({
+            candidate,
+            participant,
+            transitFrom,
+            departureIso
+          })
+        ] ??
+          transitOverrides?.[legacyRouteTransitKey(candidate.id, participant.id)]) !== undefined
     )
       ? "exact"
       : "estimated";

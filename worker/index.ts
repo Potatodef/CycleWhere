@@ -157,12 +157,21 @@ function roundedKey(point: { lat: number; lng: number }) {
   return `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`;
 }
 
+function transitCacheKey(query: TransitTimeQuery) {
+  return [
+    roundedKey(query.from),
+    roundedKey(query.to),
+    query.departureIso,
+    query.modeHint
+  ].join("|");
+}
+
 app.get("/api/health", (context) =>
   context.json({
     ok: true,
     service: "cyclewhere-api",
     routingConfigured: hasRoutingProvider(context.env),
-    graphVersion: context.env?.GRAPH_VERSION ?? null,
+    graphVersion: context.env?.GRAPH_VERSION ?? networkManifest.version,
     profileHash: context.env?.PROFILE_HASH ?? null,
     overlayHash: context.env?.OVERLAY_HASH ?? null,
     rankingHash: context.env?.RANKING_HASH ?? null,
@@ -200,7 +209,7 @@ app.post("/api/transit-times", async (context) => {
   }
   const results = await Promise.all(
     queries.map(async (query) => {
-      const cacheKey = JSON.stringify(query);
+      const cacheKey = transitCacheKey(query);
       const cached = await getCachedTransit(context.env.TRANSIT_CACHE, cacheKey);
       if (cached !== null) {
         return { minutes: cached, source: "onemap" as const };

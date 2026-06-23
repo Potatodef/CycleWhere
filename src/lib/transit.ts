@@ -2,7 +2,18 @@ import { clamp, haversineKm } from "./geo.js";
 import type { LatLng, TransitTimeQuery } from "../types.js";
 
 function timeOfDayPenalty(departureIso: string) {
-  const hour = Number.parseInt(departureIso.slice(11, 13), 10);
+  const departure = new Date(departureIso);
+  if (Number.isNaN(departure.getTime())) {
+    return 0;
+  }
+  const hour = Number.parseInt(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Singapore",
+      hour: "2-digit",
+      hour12: false
+    }).format(departure),
+    10
+  );
   if (hour >= 23 || hour < 6) {
     return 12;
   }

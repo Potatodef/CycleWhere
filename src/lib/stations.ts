@@ -36,7 +36,14 @@ export function findExactStation(query: string) {
     return null;
   }
 
-  return railStationSeeds.find((station) => normalizeStationQuery(station.name) === normalized) ?? null;
+  return (
+    railStationSeeds.find((station) => normalizeStationQuery(station.name) === normalized) ??
+    railStationSeeds.find((station) => {
+      const stationName = normalizeStationQuery(station.name);
+      return stationName.startsWith(`${normalized} `) || stationName.endsWith(` ${normalized}`);
+    }) ??
+    null
+  );
 }
 
 export function getStationRecommendations(query: string) {

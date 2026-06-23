@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 
 type WorkerRequest = {
+  requestId: number;
   candidates: RouteCandidate[];
   participants: ResolvedParticipant[];
   startTimeIso: string;
@@ -17,19 +18,21 @@ type WorkerRequest = {
 };
 
 type WorkerResponse =
-  | { ok: true; plannedRoutes: PlannedRoutes }
-  | { ok: false; error: string };
+  | { ok: true; requestId: number; plannedRoutes: PlannedRoutes }
+  | { ok: false; requestId: number; error: string };
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   try {
     const result = planRoutes(event.data);
     self.postMessage({
       ok: true,
+      requestId: event.data.requestId,
       plannedRoutes: result
     } satisfies WorkerResponse);
   } catch (error) {
     self.postMessage({
       ok: false,
+      requestId: event.data.requestId,
       error: error instanceof Error ? error.message : "Route planning failed."
     } satisfies WorkerResponse);
   }

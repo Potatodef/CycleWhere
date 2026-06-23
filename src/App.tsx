@@ -7,6 +7,7 @@ import {
   createRouteSearch,
   geocodeQueries,
   fetchTransitTimes,
+  getApiBase,
   loadRouteSearchPage,
   resolveParticipants
 } from "./lib/api.js";
@@ -28,6 +29,7 @@ const worker = new Worker(new URL("./workers/planner.worker.ts", import.meta.url
 });
 
 type WorkerRequest = {
+  requestId: number;
   candidates: RouteCandidate[];
   participants: ResolvedParticipant[];
   startTimeIso: string;
@@ -37,10 +39,10 @@ type WorkerRequest = {
 };
 
 type WorkerResponse =
-  | { ok: true; plannedRoutes: PlannedRoutes }
-  | { ok: false; error: string };
+  | { ok: true; requestId: number; plannedRoutes: PlannedRoutes }
+  | { ok: false; requestId: number; error: string };
 
-type PlanningSession = WorkerRequest & {
+type PlanningSession = Omit<WorkerRequest, "requestId"> & {
   graphVersion: string;
   nextPageToken: string | null;
   searchId: string;
@@ -202,6 +204,14 @@ function geolocationErrorMessage(error?: GeolocationPositionError) {
   }
 }
 
+function focusStationSuggestion(current: Element, offset: number) {
+  const buttons = Array.from(
+    current.closest(".station-suggestions")?.querySelectorAll<HTMLButtonElement>(".station-suggestion") ?? []
+  );
+  const index = buttons.indexOf(current as HTMLButtonElement);
+  buttons[(index + offset + buttons.length) % buttons.length]?.focus();
+}
+
 function nextColorIndex(participants: ParticipantInput[]) {
   const used = new Set(participants.map((participant) => participant.colorIndex));
   for (let index = 0; index < participantPalette.length; index += 1) {
@@ -233,16 +243,6 @@ function buildParticipantDrafts(participants: ParticipantInput[]) {
 
 function hasReliableMeetupResolution(resolution: LocationResolution | null) {
   return Boolean(resolution && resolution.confidence !== "low");
-}
-
-function getApiBase() {
-  const fromImportMeta =
-    (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ?? "";
-  const fromWindow = (window as Window & {
-    __CYCLEWHERE_CONFIG__?: { apiBase?: string };
-  }).__CYCLEWHERE_CONFIG__?.apiBase;
-
-  return fromImportMeta || fromWindow || "";
 }
 
 function routeBadgeClass(route: RoutePlan) {
@@ -426,9 +426,11 @@ export function App() {
     "Pick one meetup point and each rider's MRT station, then compare route endings by how fair the ride home looks."
   );
   const workerPromiseRef = useRef<{
+    requestId: number;
     resolve: (value: PlannedRoutes) => void;
     reject: (reason?: unknown) => void;
   } | null>(null);
+  const workerRequestIdRef = useRef(0);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const filterDialogRef = useRef<HTMLDialogElement>(null);
 
@@ -451,6 +453,9 @@ export function App() {
 
   useEffect(() => {
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if (event.data.requestId !== workerPromiseRef.current?.requestId) {
+        return;
+      }
       if (event.data.ok) {
         workerPromiseRef.current?.resolve(event.data.plannedRoutes);
       } else {
@@ -535,7 +540,7 @@ export function App() {
     if (!selectedRouteId) {
       return allRoutes[0] ?? null;
     }
-    return allRoutes.find((route) => route.id === selectedRouteId) ?? allRoutes[0] ?? null;
+    return allRoutes.find((route) => route.id === selectedRouteId) ?? null;
   }, [allRoutes, selectedRouteId]);
 
   const hasPreviewMapData = Boolean(resolvedStart || previewParticipants.length > 0 || selectedRoute);
@@ -582,7 +587,7 @@ export function App() {
         participant.id === id ? { ...participant, [key]: value } : participant
       )
     );
-    clearResolvedState();
+    resetPlannedState();
   }
 
   function addParticipant() {
@@ -600,7 +605,7 @@ export function App() {
         }
       ];
     });
-    clearResolvedState();
+    resetPlannedState();
   }
 
   function removeParticipant(id: string) {
@@ -610,7 +615,7 @@ export function App() {
       }
       return current.filter((participant) => participant.id !== id);
     });
-    clearResolvedState();
+    resetPlannedState();
   }
 
   async function resolveInputs(start: LocationResolution) {
@@ -646,7 +651,7 @@ export function App() {
 
   async function runPlanner(request: WorkerRequest) {
     return new Promise<PlannedRoutes>((resolve, reject) => {
-      workerPromiseRef.current = { resolve, reject };
+      workerPromiseRef.current = { requestId: request.requestId, resolve, reject };
       worker.postMessage(request satisfies WorkerRequest);
     });
   }
@@ -669,7 +674,10 @@ export function App() {
   }
 
   async function rerankSession(session: PlanningSession, forceExactRouteIds: string[] = []) {
-    const estimatedPlan = await runPlanner(session);
+    const estimatedPlan = await runPlanner({
+      ...session,
+      requestId: (workerRequestIdRef.current += 1)
+    });
     const limit = exactCandidateLimit(session.participants.length);
     const exactIds = Array.from(
       new Set(forceExactRouteIds.concat(pickExactCandidateIds(estimatedPlan, limit)))
@@ -715,7 +723,10 @@ export function App() {
 
     return {
       session: nextSession,
-      plannedRoutes: await runPlanner(nextSession)
+      plannedRoutes: await runPlanner({
+        ...nextSession,
+        requestId: (workerRequestIdRef.current += 1)
+      })
     };
   }
 
@@ -745,7 +756,7 @@ export function App() {
         setResolvedStart({
           label: landed.label,
           point: landed.point,
-          source: "fallback"
+          source: "geolocation"
         });
         resetPlannedState();
         setMessage(
@@ -804,8 +815,13 @@ export function App() {
     setMessage("Checking verified Singapore cycling routes, then ranking them by fairness and route quality.");
 
     try {
+      const hasCurrentResolvedParticipants = participants.every((participant) =>
+        resolvedParticipants.some(
+          (resolved) => resolved.id === participant.id && resolved.station === participant.station
+        )
+      );
       const prepareResolved =
-        resolvedStart && resolvedParticipants.length === participants.length
+        resolvedStart && hasCurrentResolvedParticipants
           ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
           : resolvedStart
             ? resolveParticipantsWithKnownStart()
@@ -1182,6 +1198,15 @@ export function App() {
                               updateParticipant(participant.id, "station", event.target.value);
                               setActiveStationFieldId(participant.id);
                             }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "ArrowDown") {
+                                return;
+                              }
+                              event.preventDefault();
+                              event.currentTarget.parentElement
+                                ?.querySelector<HTMLButtonElement>(".station-suggestion")
+                                ?.focus();
+                            }}
                             placeholder="Bedok MRT"
                           />
                           {invalidStationIds.includes(participant.id) ? (
@@ -1195,6 +1220,16 @@ export function App() {
                                   type="button"
                                   className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
                                   onMouseDown={(event) => event.preventDefault()}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "ArrowDown") {
+                                      event.preventDefault();
+                                      focusStationSuggestion(event.currentTarget, 1);
+                                    }
+                                    if (event.key === "ArrowUp") {
+                                      event.preventDefault();
+                                      focusStationSuggestion(event.currentTarget, -1);
+                                    }
+                                  }}
                                   onClick={() => {
                                     updateParticipant(participant.id, "station", stationName);
                                     setActiveStationFieldId(null);
@@ -1383,6 +1418,12 @@ export function App() {
                   </div>
                 ) : null}
               </>
+            ) : status === "planning" ? (
+              <div className="route-loading-skeleton" aria-label="Route cards loading">
+                <span />
+                <span />
+                <span />
+              </div>
             ) : (
               <p className="placeholder-copy">
                 No route cards yet. Pick the riders&apos; stations and run the planner to generate balanced route options.
@@ -1400,11 +1441,6 @@ export function App() {
           onCancel={(event) => {
             event.preventDefault();
             closeRouteFilters();
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              closeRouteFilters();
-            }
           }}
           onClick={(event) => {
             if (event.target === event.currentTarget) {
@@ -1456,7 +1492,7 @@ export function App() {
                 Reset
               </button>
               <button type="button" className="primary-button dark" onClick={closeRouteFilters}>
-                Show {allRouteCount || totalRouteCount} routes
+                Show {allRouteCount} routes
               </button>
             </div>
         </dialog>
