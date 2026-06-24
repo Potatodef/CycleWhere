@@ -297,6 +297,7 @@ app.post("/api/route-searches", async (context) => {
     const result = await discoverCyclingRoutes(normalizedPayload, {
       routingProfiles: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? ["bicycle"] : undefined,
       maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
+      maxDiversityBackfillEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
       maxFallbackEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 4 : undefined,
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({

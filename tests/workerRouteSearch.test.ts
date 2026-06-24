@@ -62,10 +62,12 @@ function candidate(): RouteCandidate {
 describe("route-search worker", () => {
   it("caps hosted GraphHopper discovery to protect the daily credit budget", async () => {
     let maxDiscoveryEndpoints: number | undefined = 0;
+    let maxDiversityBackfillEndpoints: number | undefined = 0;
     let maxFallbackEndpoints: number | undefined = 0;
     let routingProfiles: string[] | undefined;
     discoverCyclingRoutes.mockImplementationOnce(async (_request, deps) => {
       maxDiscoveryEndpoints = deps.maxDiscoveryEndpoints;
+      maxDiversityBackfillEndpoints = deps.maxDiversityBackfillEndpoints;
       maxFallbackEndpoints = deps.maxFallbackEndpoints;
       routingProfiles = deps.routingProfiles;
       return {
@@ -112,6 +114,7 @@ describe("route-search worker", () => {
 
     expect(response.status).toBe(200);
     expect(maxDiscoveryEndpoints).toBe(6);
+    expect(maxDiversityBackfillEndpoints).toBe(6);
     expect(maxFallbackEndpoints).toBe(4);
     expect(routingProfiles).toEqual(["bicycle"]);
   });

@@ -26,7 +26,9 @@ type RouteResponse = {
 
 type DiscoveryDeps = {
   maxDiscoveryEndpoints?: number;
+  maxDiversityBackfillEndpoints?: number;
   maxFallbackEndpoints?: number;
+  minDiverseRouteBuckets?: number;
   routingProfiles?: RoutingProfile[];
   fetchRoute: (input: {
     start: LatLng;
@@ -53,7 +55,9 @@ type GenericJob = {
 const MIN_ROUTE_DISTANCE_KM = 5;
 const MAX_GENERIC_DISTANCE_KM = 35;
 const MAX_DISCOVERY_ENDPOINTS = 18;
+const MAX_DIVERSITY_BACKFILL_ENDPOINTS = 12;
 const DISCOVERY_BATCH_SIZE = 5;
+const MIN_DIVERSE_ROUTE_BUCKETS = 6;
 const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 
@@ -69,6 +73,21 @@ function routeSignature(points: LatLng[]) {
     );
   }
   return signature;
+}
+
+function overlapRatio(a: string[], b: string[]) {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  const intersection = [...aSet].filter((value) => bSet.has(value)).length;
+  const union = new Set([...aSet, ...bSet]).size || 1;
+  return intersection / union;
+}
+
+function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
+  const overlap = overlapRatio(a.overlapSignature, b.overlapSignature);
+  const baseDistance = Math.max(a.distanceKm, 1);
+  const distanceDelta = Math.abs(a.distanceKm - b.distanceKm) / baseDistance;
+  return overlap >= 0.75 && distanceDelta < 0.2;
 }
 
 function routeQualityScore(candidate: RouteCandidate) {
@@ -145,6 +164,10 @@ function distanceBandIndex(distanceKm: number) {
   return 2;
 }
 
+function routeBucketKey(start: LatLng, point: LatLng) {
+  return `${distanceBandIndex(haversineKm(start, point))}:${sectorIndex(start, point)}`;
+}
+
 function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
   const homeCentre = medianHomeCentre(riderAnchors);
   const groups = new Map<string, Array<{ point: LatLng; id: string; nearbyFeatureIds: string[]; distanceKm: number }>>();
@@ -154,7 +177,7 @@ function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
     if (distanceKm < MIN_ROUTE_DISTANCE_KM || distanceKm > MAX_GENERIC_DISTANCE_KM) {
       continue;
     }
-    const key = `${distanceBandIndex(distanceKm)}:${sectorIndex(start, candidatePoint.point)}`;
+    const key = routeBucketKey(start, candidatePoint.point);
     const group = groups.get(key);
     const item = {
       point: candidatePoint.point,
@@ -289,6 +312,60 @@ async function runJob(job: GenericJob, start: LatLng, deps: DiscoveryDeps) {
   return [];
 }
 
+async function backfillRouteVariety({
+  genericJobs,
+  pageJobs,
+  routes,
+  diagnostics,
+  start,
+  deps
+}: {
+  genericJobs: GenericJob[];
+  pageJobs: GenericJob[];
+  routes: RouteCandidate[];
+  diagnostics: CandidateEvaluation[];
+  start: LatLng;
+  deps: DiscoveryDeps;
+}) {
+  const targetBuckets = deps.minDiverseRouteBuckets ?? MIN_DIVERSE_ROUTE_BUCKETS;
+  const routeBuckets = new Set(routes.map((route) => routeBucketKey(start, route.endpoint)));
+  if (routes.length === 0 || routeBuckets.size >= targetBuckets) {
+    return;
+  }
+
+  const attempted = new Set(pageJobs.map((job) => job.id));
+  const remainingJobs = genericJobs
+    .filter((job) => !attempted.has(job.id) && nearestEligibleAnchor(job.point).eligible)
+    .sort((left, right) => {
+      const leftBucketCovered = routeBuckets.has(routeBucketKey(start, left.point)) ? 1 : 0;
+      const rightBucketCovered = routeBuckets.has(routeBucketKey(start, right.point)) ? 1 : 0;
+      return leftBucketCovered - rightBucketCovered;
+    });
+
+  const maxAttempts = deps.maxDiversityBackfillEndpoints ?? MAX_DIVERSITY_BACKFILL_ENDPOINTS;
+  let attempts = 0;
+  for (const job of remainingJobs) {
+    if (attempts >= maxAttempts || routeBuckets.size >= targetBuckets) {
+      break;
+    }
+    attempts += 1;
+
+    const candidates = await runJob(job, start, deps);
+    const candidate = candidates.find((next) => !routes.some((route) => similarCandidate(route, next)));
+    if (!candidate) {
+      continue;
+    }
+
+    routes.push(candidate);
+    routeBuckets.add(routeBucketKey(start, candidate.endpoint));
+    diagnostics.push({
+      candidateId: candidate.id,
+      accepted: true,
+      reason: "diversity_backfill"
+    });
+  }
+}
+
 export async function discoverCyclingRoutes(
   request: RouteSearchRequest,
   deps: DiscoveryDeps
@@ -342,6 +419,15 @@ export async function discoverCyclingRoutes(
       routes.push(...result);
     }
   }
+
+  await backfillRouteVariety({
+    genericJobs,
+    pageJobs,
+    routes,
+    diagnostics,
+    start: request.start.point,
+    deps
+  });
 
   if (routes.length === 0) {
     const attempted = new Set(pageJobs.map((job) => job.id));
