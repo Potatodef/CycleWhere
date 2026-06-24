@@ -531,6 +531,11 @@ input:focus-visible {
   box-shadow: var(--shadow-card);
 }
 
+.station-suggestions.station-suggestions-above {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
 .station-suggestion {
   width: 100%;
   padding: 11px 12px;

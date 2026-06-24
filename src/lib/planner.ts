@@ -6,6 +6,7 @@ import {
   standardDeviation
 } from "./fairness.js";
 import { haversineKm } from "./geo.js";
+import { routeQualityScore, routeSignature } from "./routeUtils.js";
 import { estimateTransitMinutesBetween } from "./transit.js";
 import type {
   LiveDiscoveryStatus,
@@ -38,20 +39,6 @@ type TransitQueryBundle = Array<{
 }>;
 
 export const TRANSIT_HANDOFF_MINUTES = 10;
-
-function routeSignature(points: Array<{ lat: number; lng: number }>) {
-  const signature: string[] = [];
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1];
-    const current = points[index];
-    signature.push(
-      `${previous.lat.toFixed(3)},${previous.lng.toFixed(3)}->${current.lat.toFixed(
-        3
-      )},${current.lng.toFixed(3)}`
-    );
-  }
-  return signature;
-}
 
 function overlapRatio(a: string[], b: string[]) {
   const aSet = new Set(a);
@@ -117,9 +104,6 @@ function fairnessBandRank(spreadMinutes: number) {
 }
 
 function compareRoutes(a: RoutePlan, b: RoutePlan) {
-  if (a.searchRank !== undefined && b.searchRank !== undefined && a.searchRank !== b.searchRank) {
-    return a.searchRank - b.searchRank;
-  }
   const fairnessBandDelta = fairnessBandRank(a.fairnessSpreadMinutes) - fairnessBandRank(b.fairnessSpreadMinutes);
   if (fairnessBandDelta !== 0) {
     return fairnessBandDelta;
@@ -146,6 +130,16 @@ function compareRoutes(a: RoutePlan, b: RoutePlan) {
   const confidenceDelta = confidenceRank(b.verifiedCoverage) - confidenceRank(a.verifiedCoverage);
   if (confidenceDelta !== 0) {
     return confidenceDelta;
+  }
+
+  if (
+    a.fairnessSource === "estimated" &&
+    b.fairnessSource === "estimated" &&
+    a.searchRank !== undefined &&
+    b.searchRank !== undefined &&
+    a.searchRank !== b.searchRank
+  ) {
+    return a.searchRank - b.searchRank;
   }
 
   return a.distanceKm - b.distanceKm || a.id.localeCompare(b.id);
@@ -188,13 +182,6 @@ function similarRoute(a: RoutePlan, b: RoutePlan) {
   const baseDistance = Math.max(a.distanceKm, 1);
   const distanceDelta = Math.abs(a.distanceKm - b.distanceKm) / baseDistance;
   return overlap >= 0.75 && distanceDelta < 0.2;
-}
-
-function routeQualityScore(candidate: RouteCandidate) {
-  const verifiedCoverage = candidate.verifiedCoverage ?? 0;
-  const protectedCoverage = (candidate.pcnCoverage ?? 0) + (candidate.cyclingPathCoverage ?? 0);
-  const mixedTrafficPenalty = (candidate.mixedTrafficMeters ?? 0) / 80;
-  return Math.round(verifiedCoverage * 70 + protectedCoverage * 20 - mixedTrafficPenalty);
 }
 
 function transitOriginPoint(candidate: RouteCandidate) {

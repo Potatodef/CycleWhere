@@ -1,13 +1,6 @@
 import { railStationSeeds } from "./anchors.js";
-
-export function normalizeStationQuery(query: string) {
-  return query
-    .toLowerCase()
-    .replace(/[()/]/g, " ")
-    .replace(/\b(?:mrt|lrt|station)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+import { normalizeStationQuery, stationNameMatchesQuery } from "./stationMatching.js";
+export { normalizeStationQuery } from "./stationMatching.js";
 
 function editDistance(left: string, right: string) {
   const rows = Array.from({ length: left.length + 1 }, (_, index) => index);
@@ -36,14 +29,7 @@ export function findExactStation(query: string) {
     return null;
   }
 
-  return (
-    railStationSeeds.find((station) => normalizeStationQuery(station.name) === normalized) ??
-    railStationSeeds.find((station) => {
-      const stationName = normalizeStationQuery(station.name);
-      return stationName.startsWith(`${normalized} `) || stationName.endsWith(` ${normalized}`);
-    }) ??
-    null
-  );
+  return railStationSeeds.find((station) => stationNameMatchesQuery(station.name, normalized)) ?? null;
 }
 
 export function getStationRecommendations(query: string) {

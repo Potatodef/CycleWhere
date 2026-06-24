@@ -209,7 +209,15 @@ function focusStationSuggestion(current: Element, offset: number) {
     current.closest(".station-suggestions")?.querySelectorAll<HTMLButtonElement>(".station-suggestion") ?? []
   );
   const index = buttons.indexOf(current as HTMLButtonElement);
-  buttons[(index + offset + buttons.length) % buttons.length]?.focus();
+  const next = index + offset;
+  if (next < 0) {
+    current
+      .closest(".field-with-suggestions")
+      ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
+      ?.focus();
+    return;
+  }
+  buttons[next % buttons.length]?.focus();
 }
 
 function nextColorIndex(participants: ParticipantInput[]) {
@@ -239,6 +247,13 @@ function buildParticipantDrafts(participants: ParticipantInput[]) {
     name: duplicateCounts[names[index] ?? ""] > 1 ? `${names[index]} (${index + 1})` : names[index] ?? `Rider ${index + 1}`,
     station: participant.station
   }));
+}
+
+function stripSearchRank(candidates: RouteCandidate[]) {
+  return candidates.map((candidate) => {
+    const { searchRank: _searchRank, ...rest } = candidate;
+    return rest;
+  });
 }
 
 function hasReliableMeetupResolution(resolution: LocationResolution | null) {
@@ -555,6 +570,86 @@ export function App() {
     .filter(Boolean)
     .join(" · ");
 
+  useEffect(() => {
+    const participantNames = new Map(
+      buildParticipantDrafts(participants).map((participant) => [participant.id, participant.name])
+    );
+
+    setResolvedParticipants((current) =>
+      current.map((participant) => {
+        const name = participantNames.get(participant.id);
+        return name !== undefined && participant.name !== name ? { ...participant, name } : participant;
+      })
+    );
+    setPlanningSession((current) =>
+      current
+        ? {
+            ...current,
+            participants: current.participants.map((participant) => {
+              const name = participantNames.get(participant.id);
+              return name !== undefined && participant.name !== name ? { ...participant, name } : participant;
+            })
+          }
+        : current
+    );
+    setResults((current) =>
+      current
+        ? {
+            ...current,
+            sections: current.sections.map((section) => ({
+              ...section,
+              routes: section.routes.map((route) => ({
+                ...route,
+                participantTimes: route.participantTimes.map((participantTime) => {
+                  const name = participantNames.get(participantTime.participantId);
+                  return name !== undefined && participantTime.participantName !== name
+                    ? { ...participantTime, participantName: name }
+                    : participantTime;
+                })
+              }))
+            }))
+          }
+        : current
+    );
+  }, [participants]);
+
+  useEffect(() => {
+    if (!activeStationFieldId) {
+      return;
+    }
+
+    let frame = 0;
+    const updateSuggestionPosition = () => {
+      frame = 0;
+      const field = Array.from(document.querySelectorAll<HTMLElement>(".field-with-suggestions")).find(
+        (element) => element.dataset.stationFieldId === activeStationFieldId
+      );
+      const suggestions = field?.querySelector<HTMLElement>(".station-suggestions");
+      if (!suggestions) {
+        return;
+      }
+      suggestions.classList.remove("station-suggestions-above");
+      const rect = suggestions.getBoundingClientRect();
+      if (rect.bottom > window.innerHeight - 12 && rect.top > rect.height + 12) {
+        suggestions.classList.add("station-suggestions-above");
+      }
+    };
+    const scheduleUpdate = () => {
+      if (!frame) {
+        frame = window.requestAnimationFrame(updateSuggestionPosition);
+      }
+    };
+
+    scheduleUpdate();
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [activeStationFieldId, participants]);
+
   function clearResolvedState() {
     setResolvedStart(null);
     setResolvedParticipants([]);
@@ -587,7 +682,9 @@ export function App() {
         participant.id === id ? { ...participant, [key]: value } : participant
       )
     );
-    resetPlannedState();
+    if (key === "station") {
+      resetPlannedState();
+    }
   }
 
   function addParticipant() {
@@ -683,7 +780,7 @@ export function App() {
       new Set(forceExactRouteIds.concat(pickExactCandidateIds(estimatedPlan, limit)))
     ).slice(0, limit);
 
-    if (!getApiBase() || exactIds.length === 0) {
+    if (exactIds.length === 0) {
       return {
         session,
         plannedRoutes: estimatedPlan
@@ -718,6 +815,7 @@ export function App() {
 
     const nextSession = {
       ...session,
+      candidates: stripSearchRank(session.candidates),
       transitOverrides: nextOverrides
     };
 
@@ -815,9 +913,13 @@ export function App() {
     setMessage("Checking verified Singapore cycling routes, then ranking them by fairness and route quality.");
 
     try {
-      const hasCurrentResolvedParticipants = participants.every((participant) =>
+      const participantDrafts = buildParticipantDrafts(participants);
+      const hasCurrentResolvedParticipants = participantDrafts.every((participant) =>
         resolvedParticipants.some(
-          (resolved) => resolved.id === participant.id && resolved.station === participant.station
+          (resolved) =>
+            resolved.id === participant.id &&
+            resolved.station === participant.station &&
+            resolved.name === participant.name
         )
       );
       const prepareResolved =
@@ -924,9 +1026,13 @@ export function App() {
   }
 
   async function handleSelectRoute(routeId: string) {
+    if (status !== "idle") {
+      return;
+    }
+
     setSelectedRouteId(routeId);
 
-    if (!results || !planningSession || !getApiBase()) {
+    if (!results || !planningSession) {
       return;
     }
 
@@ -1179,6 +1285,7 @@ export function App() {
                         <span>MRT station</span>
                         <div
                           className="field-with-suggestions"
+                          data-station-field-id={participant.id}
                           onBlur={(event) => {
                             if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
                               return;
@@ -1199,6 +1306,11 @@ export function App() {
                               setActiveStationFieldId(participant.id);
                             }}
                             onKeyDown={(event) => {
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                setActiveStationFieldId(null);
+                                return;
+                              }
                               if (event.key !== "ArrowDown") {
                                 return;
                               }
@@ -1228,6 +1340,14 @@ export function App() {
                                     if (event.key === "ArrowUp") {
                                       event.preventDefault();
                                       focusStationSuggestion(event.currentTarget, -1);
+                                    }
+                                    if (event.key === "Escape") {
+                                      event.preventDefault();
+                                      setActiveStationFieldId(null);
+                                      event.currentTarget
+                                        .closest(".field-with-suggestions")
+                                        ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
+                                        ?.focus();
                                     }
                                   }}
                                   onClick={() => {
@@ -1491,8 +1611,12 @@ export function App() {
               <button type="button" className="secondary-button" onClick={resetRouteFilters}>
                 Reset
               </button>
-              <button type="button" className="primary-button dark" onClick={closeRouteFilters}>
-                Show {allRouteCount} routes
+              <button
+                type="button"
+                className="primary-button dark"
+                onClick={allRouteCount > 0 ? closeRouteFilters : resetRouteFilters}
+              >
+                {allRouteCount > 0 ? `Show ${allRouteCount} routes` : "No routes match - reset filters"}
               </button>
             </div>
         </dialog>
