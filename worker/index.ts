@@ -354,8 +354,11 @@ app.post("/api/route-searches", async (context) => {
       liveDiscoveryStatus: result.liveDiscoveryStatus
     }).sections.flatMap((section) => section.routes);
     const acceptedIds = new Set(estimatedOrder.map((route) => route.id));
-    const materializedRoutes = estimatedOrder.map((route, searchRank) => ({
-      ...result.routes.find((candidate) => candidate.id === route.id)!,
+    const prioritizedRouteIds = estimatedOrder
+      .map((route) => route.id)
+      .concat(result.routes.filter((candidate) => !acceptedIds.has(candidate.id)).map((candidate) => candidate.id));
+    const materializedRoutes = prioritizedRouteIds.map((routeId, searchRank) => ({
+      ...result.routes.find((candidate) => candidate.id === routeId)!,
       searchRank
     }));
     const diagnostics = result.diagnostics.concat(

@@ -155,11 +155,18 @@ function selectDiverseRoutes(candidates: RoutePlan[]) {
   const chosen: RoutePlan[] = [];
   const byScore = [...candidates].sort(compareRoutes);
   const bandCounts = new Map<string, number>();
+  const availableByBand = byScore.reduce<Map<string, number>>((counts, candidate) => {
+    const band = distanceBand(candidate.distanceKm);
+    counts.set(band, (counts.get(band) ?? 0) + 1);
+    return counts;
+  }, new Map());
 
   for (const candidate of byScore) {
     const band = distanceBand(candidate.distanceKm);
     const usedInBand = bandCounts.get(band) ?? 0;
-    if (usedInBand >= 2) {
+    const availableInBand = availableByBand.get(band) ?? 0;
+    const maxPerBand = availableInBand >= 5 ? 2 : 3;
+    if (usedInBand >= maxPerBand) {
       continue;
     }
 

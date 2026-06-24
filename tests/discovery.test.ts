@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
+const mockedCoverage = vi.hoisted(() => ({
+  value: {
+    verifiedCoverage: 0.81,
+    pcnCoverage: 0.34,
+    cyclingPathCoverage: 0.46,
+    mixedTrafficMeters: 180,
+    sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+    sourceFeatureIds: ["cycling-path-1"]
+  }
+}));
+
 vi.mock("../src/lib/verifiedNetwork.js", () => ({
   listVerifiedCandidatePoints: () => [
     {
@@ -18,18 +29,19 @@ vi.mock("../src/lib/verifiedNetwork.js", () => ({
   listVerifiedBusAnchors: () => [],
   listVerifiedNamedRoutes: () => [],
   getVerifiedNetwork: () => ({ version: "2026-06-21" }),
-  measureRouteCoverage: () => ({
-    verifiedCoverage: 0.81,
-    pcnCoverage: 0.34,
-    cyclingPathCoverage: 0.46,
-    mixedTrafficMeters: 180,
-    sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
-    sourceFeatureIds: ["cycling-path-1"]
-  })
+  measureRouteCoverage: () => mockedCoverage.value
 }));
 
 describe("live discovery", () => {
   it("returns verified network routes when the route and transport anchor are both valid", async () => {
+    mockedCoverage.value = {
+      verifiedCoverage: 0.81,
+      pcnCoverage: 0.34,
+      cyclingPathCoverage: 0.46,
+      mixedTrafficMeters: 180,
+      sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+      sourceFeatureIds: ["cycling-path-1"]
+    };
     const { discoverCyclingRoutes } = await import("../worker/discovery.js");
     const fetchRoute = vi.fn(async () => ({
       geometry: [
@@ -127,6 +139,60 @@ describe("live discovery", () => {
     expect(result.diagnostics.some((diagnostic) => !diagnostic.accepted)).toBe(true);
     expect(result.zoneStatuses[0]?.status).toBe("partial");
     expect(result.liveDiscoveryStatus).toBe("partial");
+  });
+
+  it("keeps longer routes when verified coverage is strong even if mixed traffic meters are high", async () => {
+    mockedCoverage.value = {
+      verifiedCoverage: 0.68,
+      pcnCoverage: 0.52,
+      cyclingPathCoverage: 0.12,
+      mixedTrafficMeters: 3200,
+      sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+      sourceFeatureIds: ["cycling-path-1"]
+    };
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async () => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: 1.29, lng: 103.87 },
+        { lat: 1.305, lng: 103.895 },
+        { lat: 1.32403889, lng: 103.93003611 }
+      ],
+      distanceKm: 18.4,
+      durationMinutes: 56
+    }));
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        fetchRoute
+      }
+    );
+
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]?.verifiedCoverage).toBe(0.68);
   });
 
   it("caps fallback routing attempts when first-page candidates fail", async () => {

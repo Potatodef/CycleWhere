@@ -54,8 +54,7 @@ const MIN_ROUTE_DISTANCE_KM = 5;
 const MAX_GENERIC_DISTANCE_KM = 35;
 const MAX_DISCOVERY_ENDPOINTS = 18;
 const DISCOVERY_BATCH_SIZE = 5;
-const VERIFIED_COVERAGE_MINIMUM = 0.55;
-const MIXED_TRAFFIC_MAXIMUM = 1200;
+const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 
 function routeSignature(points: LatLng[]) {
@@ -171,14 +170,25 @@ function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
   }
 
   for (const group of groups.values()) {
-    group.sort((left, right) => left.distanceKm - right.distanceKm || left.id.localeCompare(right.id));
+    group.sort((left, right) => {
+      const rightScore = homewardScore(start, right.point, homeCentre);
+      const leftScore = homewardScore(start, left.point, homeCentre);
+      const rightHomeward = rightScore >= -0.1 ? 0 : 1;
+      const leftHomeward = leftScore >= -0.1 ? 0 : 1;
+      return (
+        leftHomeward - rightHomeward ||
+        rightScore - leftScore ||
+        left.distanceKm - right.distanceKm ||
+        left.id.localeCompare(right.id)
+      );
+    });
   }
 
   const ordered: GenericJob[] = [];
   let appended = true;
   while (appended) {
     appended = false;
-    for (let band = 0; band < 4; band += 1) {
+    for (let band = 0; band < 3; band += 1) {
       for (let sector = 0; sector < 8; sector += 1) {
         const key = `${band}:${sector}`;
         const group = groups.get(key);
@@ -200,26 +210,16 @@ function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
     }
   }
 
-  return ordered.sort((left, right) => {
-    const leftScore = homewardScore(start, left.point, homeCentre);
-    const rightScore = homewardScore(start, right.point, homeCentre);
-    const leftHomeward = leftScore >= -0.1 ? 0 : 1;
-    const rightHomeward = rightScore >= -0.1 ? 0 : 1;
-    return (
-      leftHomeward - rightHomeward ||
-      haversineKm(left.point, homeCentre) - haversineKm(right.point, homeCentre) ||
-      left.id.localeCompare(right.id)
-    );
-  });
+  return ordered;
 }
 
 function qualityGate(geometry: LatLng[]) {
   const coverage = measureRouteCoverage(geometry);
   return {
     coverage,
-    eligible:
-      coverage.verifiedCoverage >= VERIFIED_COVERAGE_MINIMUM &&
-      coverage.mixedTrafficMeters <= MIXED_TRAFFIC_MAXIMUM
+    // mixedTrafficMeters is derived from verifiedCoverage, so using both as hard gates
+    // turns long routes into an implicit near-100%-coverage requirement.
+    eligible: coverage.verifiedCoverage >= VERIFIED_COVERAGE_MINIMUM
   };
 }
 

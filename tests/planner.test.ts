@@ -223,6 +223,26 @@ describe("planner", () => {
     expect(ids).toContain("route-3");
   });
 
+  it("does not collapse scarce same-band routes down to only two", () => {
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "route-1", overlapSignature: ["a", "b", "c"], distanceKm: 11 }),
+        routeCandidate({ id: "route-2", overlapSignature: ["d", "e", "f"], distanceKm: 12.4 }),
+        routeCandidate({ id: "route-3", overlapSignature: ["g", "h", "i"], distanceKm: 13.1 })
+      ],
+      participants: [
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    const ids = routes.sections.flatMap((section) => section.routes.map((route) => route.id));
+    expect(ids).toEqual(["route-1", "route-2", "route-3"]);
+  });
+
   it("can surface uneven majority-friendly routes for clustered homes plus one outlier", () => {
     const routes = planRoutes({
       candidates: [
