@@ -179,7 +179,7 @@ function selectDiverseRoutes(candidates: RoutePlan[]) {
 
 function similarRoute(a: RoutePlan, b: RoutePlan) {
   const overlap = overlapRatio(a.overlapSignature, b.overlapSignature);
-  const baseDistance = Math.max(a.distanceKm, 1);
+  const baseDistance = Math.max(a.distanceKm, b.distanceKm, 1);
   const distanceDelta = Math.abs(a.distanceKm - b.distanceKm) / baseDistance;
   return overlap >= 0.75 && distanceDelta < 0.2;
 }

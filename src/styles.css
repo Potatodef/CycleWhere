@@ -783,6 +783,7 @@ input:focus-visible {
 
 .route-card:focus-visible,
 .details-toggle:focus-visible,
+.route-select-button:focus-visible,
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
 .ghost-button:focus-visible,
@@ -790,6 +791,24 @@ input:focus-visible {
 .station-suggestion:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--brand) 70%, white 30%);
   outline-offset: 3px;
+}
+
+.route-select-button {
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--brand) 22%, var(--line) 78%);
+  background: color-mix(in srgb, var(--brand) 8%, var(--surface) 92%);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.route-select-button[aria-pressed="true"] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: white;
 }
 
 .route-title-row {

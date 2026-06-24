@@ -1,6 +1,6 @@
 import { anchorSeeds } from "../data/anchors.js";
 import { haversineKm } from "./geo.js";
-import { normalizeStationQuery, stationNameMatchesQuery } from "./stationMatching.js";
+import { hasExplicitStationSuffix, normalizeStationQuery, stationNameMatchesQuery } from "./stationMatching.js";
 import type { LatLng, LocationResolution, TransportAnchor } from "../types.js";
 
 export const railStationSeeds = anchorSeeds.filter((anchor) => anchor.kind === "rail");
@@ -12,7 +12,19 @@ export function findRailStation(query: string) {
     return null;
   }
 
-  return railStationSeeds.find((anchor) => stationNameMatchesQuery(anchor.name, normalized)) ?? null;
+  const exactMatches = railStationSeeds.filter(
+    (anchor) => normalizeStationQuery(anchor.name) === normalized
+  );
+  if (exactMatches.length === 1) {
+    const broaderMatches = railStationSeeds.filter((anchor) => stationNameMatchesQuery(anchor.name, normalized));
+    if (broaderMatches.length === 1 || hasExplicitStationSuffix(query)) {
+      return exactMatches[0] ?? null;
+    }
+    return null;
+  }
+
+  const matches = railStationSeeds.filter((anchor) => stationNameMatchesQuery(anchor.name, normalized));
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export function resolveRailStationAnchor(

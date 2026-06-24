@@ -48,6 +48,10 @@ type Bindings = {
   PAGE_TOKEN_SECRET?: string;
 };
 
+type JsonParseResult<T> =
+  | { ok: true; payload: T }
+  | { ok: false; error: string };
+
 export const app = new Hono<{ Bindings: Bindings }>();
 const MAX_GEOCODE_QUERIES = 12;
 const MAX_TRANSIT_QUERIES = 40;
@@ -82,7 +86,7 @@ function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string
     return origin;
   }
 
-  return allowlist[0];
+  return undefined;
 }
 
 app.use(
@@ -163,6 +167,70 @@ function roundedKey(point: { lat: number; lng: number }) {
   return `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`;
 }
 
+async function readJson<T>(request: Request): Promise<JsonParseResult<T>> {
+  try {
+    return { ok: true, payload: (await request.json()) as T };
+  } catch {
+    return { ok: false, error: "Malformed JSON request body." };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function validPoint(point: unknown): point is { lat: number; lng: number } {
+  return isRecord(point) && isFiniteNumber(point.lat) && isFiniteNumber(point.lng);
+}
+
+function validIsoDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(new Date(value).getTime());
+}
+
+function validTransportMode(value: unknown): value is "rail" | "bus" {
+  return value === "rail" || value === "bus";
+}
+
+function validTransportAnchor(value: unknown) {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    validTransportMode(value.kind) &&
+    validSingaporePoint(value.point as { lat: number; lng: number } | undefined) &&
+    (value.distanceFromHomeKm === undefined || isFiniteNumber(value.distanceFromHomeKm)) &&
+    (value.fallbackSuggested === undefined || typeof value.fallbackSuggested === "boolean")
+  );
+}
+
+function validTransitQuery(value: unknown): value is TransitTimeQuery {
+  return (
+    isRecord(value) &&
+    validPoint(value.from) &&
+    validPoint(value.to) &&
+    validIsoDate(value.departureIso) &&
+    validTransportMode(value.modeHint)
+  );
+}
+
+function validParticipant(value: unknown) {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    validSingaporePoint(value.station as { lat: number; lng: number } | undefined) &&
+    validTransportAnchor(value.anchor)
+  );
+}
+
+function noStore(context: { header: (name: string, value: string) => void }) {
+  context.header("Cache-Control", "no-store, private");
+}
+
 function transitCacheKey(query: TransitTimeQuery) {
   const departureMs = new Date(query.departureIso).getTime();
   const roundedDepartureIso = Number.isNaN(departureMs)
@@ -189,11 +257,54 @@ app.get("/api/health", (context) =>
   })
 );
 
+app.get("/api/readiness", async (context) => {
+  const checks = {
+    routingConfigured: hasRoutingProvider(context.env),
+    sessionsConfigured: Boolean(context.env.TRANSIT_CACHE && context.env.PAGE_TOKEN_SECRET),
+    databaseReachable: false,
+    graphVersion: context.env?.GRAPH_VERSION ?? networkManifest.version,
+    profileHash: context.env?.PROFILE_HASH ?? null,
+    overlayHash: context.env?.OVERLAY_HASH ?? null,
+    rankingHash: context.env?.RANKING_HASH ?? null
+  };
+
+  if (context.env.TRANSIT_CACHE) {
+    try {
+      await context.env.TRANSIT_CACHE.prepare("SELECT 1").first();
+      checks.databaseReachable = true;
+    } catch (error) {
+      console.error("Readiness database check failed", error);
+    }
+  }
+
+  const ready = checks.routingConfigured && checks.sessionsConfigured && checks.databaseReachable;
+  return context.json(
+    {
+      ok: ready,
+      service: "cyclewhere-api",
+      checks,
+      timestamp: new Date().toISOString()
+    },
+    ready ? 200 : 503
+  );
+});
+
 app.get("/api/network-manifest", (context) => context.json(networkManifest));
 
 app.post("/api/geocode", async (context) => {
-  const payload = (await context.req.json()) as { queries?: string[] };
-  const queries = payload.queries?.filter(Boolean) ?? [];
+  const parsed = await readJson<{ queries?: unknown }>(context.req.raw);
+  if (!parsed.ok) {
+    return context.json({ error: parsed.error }, 400);
+  }
+  if (parsed.payload.queries !== undefined && !Array.isArray(parsed.payload.queries)) {
+    return context.json({ error: "Geocode queries must be an array." }, 400);
+  }
+  if (Array.isArray(parsed.payload.queries) && !parsed.payload.queries.every((query) => typeof query === "string")) {
+    return context.json({ error: "Geocode queries must be strings." }, 400);
+  }
+  const queries = ((parsed.payload.queries ?? []) as string[])
+    .map((query) => query.trim())
+    .filter(Boolean);
 
   if (queries.length === 0) {
     return context.json<GeocodeResponse>({ results: [] });
@@ -212,10 +323,19 @@ app.post("/api/geocode", async (context) => {
 });
 
 app.post("/api/transit-times", async (context) => {
-  const payload = (await context.req.json()) as { queries?: TransitTimeQuery[] };
-  const queries = payload.queries ?? [];
+  const parsed = await readJson<{ queries?: unknown }>(context.req.raw);
+  if (!parsed.ok) {
+    return context.json({ error: parsed.error }, 400);
+  }
+  if (parsed.payload.queries !== undefined && !Array.isArray(parsed.payload.queries)) {
+    return context.json({ error: "Transit queries must be an array." }, 400);
+  }
+  const queries = (parsed.payload.queries ?? []) as unknown[];
   if (queries.length > MAX_TRANSIT_QUERIES) {
     return context.json({ error: "Too many transit queries." }, 400);
+  }
+  if (!queries.every(validTransitQuery)) {
+    return context.json({ error: "Invalid transit query." }, 400);
   }
   const results = await Promise.all(
     queries.map(async (query) => {
@@ -263,8 +383,12 @@ function validSingaporePoint(point: { lat: number; lng: number } | undefined) {
 }
 
 app.post("/api/route-searches", async (context) => {
-  const payload = (await context.req.json()) as RouteSearchRequest;
-  if (!payload.start?.point || !Array.isArray(payload.participants)) {
+  const parsed = await readJson<RouteSearchRequest>(context.req.raw);
+  if (!parsed.ok) {
+    return context.json({ error: parsed.error }, 400);
+  }
+  const payload = parsed.payload as unknown;
+  if (!isRecord(payload) || !isRecord(payload.start) || !Array.isArray(payload.participants)) {
     return context.json<RouteSearchError>(
       { error: "Invalid route-search request.", code: "invalid_meetup" },
       422
@@ -273,9 +397,21 @@ app.post("/api/route-searches", async (context) => {
   if (payload.participants.length === 0 || payload.participants.length > MAX_PARTICIPANTS) {
     return context.json({ error: "Invalid participant count." }, 400);
   }
-  if (!validSingaporePoint(payload.start.point)) {
+  if (!validIsoDate(payload.departureIso)) {
+    return context.json<RouteSearchError>(
+      { error: "Invalid departure time.", code: "invalid_meetup" },
+      422
+    );
+  }
+  if (!validSingaporePoint(payload.start.point as { lat: number; lng: number } | undefined)) {
     return context.json<RouteSearchError>(
       { error: "Meetup is outside the supported Singapore service area.", code: "invalid_meetup" },
+      422
+    );
+  }
+  if (!payload.participants.every(validParticipant)) {
+    return context.json<RouteSearchError>(
+      { error: "Invalid participant station or anchor.", code: "invalid_meetup" },
       422
     );
   }
@@ -294,7 +430,8 @@ app.post("/api/route-searches", async (context) => {
 
   let routeSearchRequestId: string | null = null;
   try {
-    const snappedStart = await snapMeetupWithGraphHopper(payload.start.point, context.env);
+    const routeSearchPayload = payload as unknown as RouteSearchRequest;
+    const snappedStart = await snapMeetupWithGraphHopper(routeSearchPayload.start.point, context.env);
     if (!snappedStart) {
       return context.json<RouteSearchError>(
         { error: "Meetup cannot safely snap to the bicycle network.", code: "invalid_meetup" },
@@ -302,8 +439,8 @@ app.post("/api/route-searches", async (context) => {
       );
     }
     const normalizedPayload = {
-      ...payload,
-      start: { ...payload.start, point: snappedStart.point }
+      ...routeSearchPayload,
+      start: { ...routeSearchPayload.start, point: snappedStart.point }
     };
     const searchId = crypto.randomUUID();
     routeSearchRequestId = searchId;
@@ -420,9 +557,8 @@ app.post("/api/route-searches", async (context) => {
     } catch (error) {
       console.error("Route search session write failed", error);
     }
-    return context.json<RouteSearchResult>(
-      await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET)
-    );
+    noStore(context);
+    return context.json<RouteSearchResult>(await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET));
   } catch (error) {
     console.error("Route search failed", {
       requestId: routeSearchRequestId,
@@ -436,6 +572,7 @@ app.post("/api/route-searches", async (context) => {
 });
 
 app.get("/api/route-searches/page", async (context) => {
+  noStore(context);
   if (!context.env.TRANSIT_CACHE || !context.env.PAGE_TOKEN_SECRET) {
     return context.json<RouteSearchError>(
       { error: "Route-search sessions are not configured.", code: "routing_unavailable" },

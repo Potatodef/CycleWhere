@@ -73,8 +73,9 @@ describe("fairness", () => {
     expect(classifyFairness(31)).toBe("Uneven");
   });
 
-  it("detects majority-friendly outliers only for groups of four or more", () => {
+  it("detects majority-friendly clusters only for groups of four or more", () => {
     expect(majorityFriendlySpread([20, 21, 22, 60])).toBe(true);
+    expect(majorityFriendlySpread([20, 21, 22, 60, 90])).toBe(true);
     expect(majorityFriendlySpread([20, 21, 60])).toBe(false);
   });
 
@@ -247,6 +248,28 @@ describe("planner", () => {
     expect(ids).toContain("route-1");
     expect(ids).not.toContain("route-2");
     expect(ids).toContain("route-3");
+  });
+
+  it("filters borderline duplicate routes symmetrically after ranking", () => {
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "short", overlapSignature: ["same"], distanceKm: 8 }),
+        routeCandidate({ id: "borderline", overlapSignature: ["same"], distanceKm: 9.7 }),
+        routeCandidate({ id: "different", overlapSignature: ["different"], distanceKm: 11 })
+      ],
+      participants: [
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    const ids = routes.sections.flatMap((section) => section.routes.map((route) => route.id));
+    expect(ids).toContain("short");
+    expect(ids).not.toContain("borderline");
+    expect(ids).toContain("different");
   });
 
   it("recomputes empty route signatures before diversity filtering", () => {

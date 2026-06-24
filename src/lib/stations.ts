@@ -1,5 +1,5 @@
 import { railStationSeeds } from "./anchors.js";
-import { normalizeStationQuery, stationNameMatchesQuery } from "./stationMatching.js";
+import { hasExplicitStationSuffix, normalizeStationQuery, stationNameMatchesQuery } from "./stationMatching.js";
 export { normalizeStationQuery } from "./stationMatching.js";
 
 function editDistance(left: string, right: string) {
@@ -29,7 +29,19 @@ export function findExactStation(query: string) {
     return null;
   }
 
-  return railStationSeeds.find((station) => stationNameMatchesQuery(station.name, normalized)) ?? null;
+  const exactMatches = railStationSeeds.filter(
+    (station) => normalizeStationQuery(station.name) === normalized
+  );
+  if (exactMatches.length === 1) {
+    const broaderMatches = railStationSeeds.filter((station) => stationNameMatchesQuery(station.name, normalized));
+    if (broaderMatches.length === 1 || hasExplicitStationSuffix(query)) {
+      return exactMatches[0] ?? null;
+    }
+    return null;
+  }
+
+  const matches = railStationSeeds.filter((station) => stationNameMatchesQuery(station.name, normalized));
+  return matches.length === 1 ? matches[0] ?? null : null;
 }
 
 export function getStationRecommendations(query: string) {

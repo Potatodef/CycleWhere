@@ -182,6 +182,24 @@ export async function materializePage(
 ): Promise<RouteSearchPageResult> {
   const routes = search.routes.slice(startIndex, startIndex + PAGE_SIZE);
   const nextIndex = startIndex + routes.length;
+  const diagnosticsSummary = search.diagnostics.reduce(
+    (summary, diagnostic) => {
+      if (diagnostic.accepted) {
+        summary.acceptedCount += 1;
+      } else {
+        summary.rejectedCount += 1;
+        const reason = diagnostic.reason ?? "unknown";
+        summary.reasons[reason] = (summary.reasons[reason] ?? 0) + 1;
+      }
+      return summary;
+    },
+    {
+      acceptedCount: 0,
+      rejectedCount: 0,
+      reasons: {} as Record<string, number>
+    }
+  );
+
   return {
     searchId: search.searchId,
     routes,
@@ -189,6 +207,7 @@ export async function materializePage(
     liveDiscoveryStatus: search.liveDiscoveryStatus,
     graphVersion: search.graphVersion,
     expiresAt: search.expiresAt,
+    diagnosticsSummary,
     nextPageToken:
       nextIndex < search.routes.length
         ? await createPageToken(

@@ -42,8 +42,11 @@ export function majorityFriendlySpread(values: number[]) {
     return false;
   }
 
-  for (let index = 0; index < values.length; index += 1) {
-    const subset = values.filter((_, candidateIndex) => candidateIndex !== index);
+  const sorted = [...values].sort((left, right) => left - right);
+  const majoritySize = Math.floor(values.length / 2) + 1;
+
+  for (let start = 0; start <= sorted.length - majoritySize; start += 1) {
+    const subset = sorted.slice(start, start + majoritySize);
     if (spread(subset) <= 20) {
       return true;
     }

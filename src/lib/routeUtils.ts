@@ -3,9 +3,9 @@ import type { LatLng, RouteCandidate } from "../types.js";
 export const MAX_ROUTE_SIGNATURE_SEGMENTS = 160;
 
 function formatSegment(previous: LatLng, current: LatLng) {
-  return `${previous.lat.toFixed(3)},${previous.lng.toFixed(3)}->${current.lat.toFixed(
-    3
-  )},${current.lng.toFixed(3)}`;
+  return `${previous.lat.toFixed(4)},${previous.lng.toFixed(4)}->${current.lat.toFixed(
+    4
+  )},${current.lng.toFixed(4)}`;
 }
 
 function signatureSegmentIndexes(segmentCount: number, maxSegments: number) {

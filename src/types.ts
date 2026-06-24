@@ -193,6 +193,11 @@ export type RouteSearchResult = {
   graphVersion: string;
   expiresAt: string;
   nextPageToken: string | null;
+  diagnosticsSummary?: {
+    acceptedCount: number;
+    rejectedCount: number;
+    reasons: Record<string, number>;
+  };
 };
 
 export type RouteSearchPageResult = Omit<RouteSearchResult, "searchId" | "expiresAt"> & {

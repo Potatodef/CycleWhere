@@ -19,3 +19,7 @@ export function stationNameMatchesQuery(stationName: string, query: string) {
     normalizedStationName.endsWith(` ${normalizedQuery}`)
   );
 }
+
+export function hasExplicitStationSuffix(query: string) {
+  return /\b(?:mrt|lrt|station)\b/i.test(query);
+}

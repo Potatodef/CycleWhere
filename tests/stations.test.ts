@@ -10,6 +10,11 @@ describe("getStationRecommendations", () => {
     expect(findExactStation("Bukit Panjang MRT")?.name).toBe("Bukit Panjang MRT/LRT");
   });
 
+  it("requires explicit station selection for ambiguous short names", () => {
+    expect(findExactStation("Bedok")).toBeNull();
+    expect(findExactStation("Bedok MRT")?.name).toBe("Bedok MRT");
+  });
+
   it("does not accept arbitrary substrings as exact station matches", () => {
     expect(findExactStation("ines")).toBeNull();
   });

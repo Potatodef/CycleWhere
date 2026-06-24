@@ -13,8 +13,8 @@ const verifiedNetwork = verifiedNetworkJson as VerifiedNetworkData;
 const REFERENCE_LAT = 1.3521;
 const METERS_PER_LAT = 111320;
 const METERS_PER_LNG = 111320 * Math.cos((REFERENCE_LAT * Math.PI) / 180);
-const COVERAGE_RADIUS_METERS = 40;
-const COVERAGE_GRID_METERS = 80;
+const COVERAGE_RADIUS_METERS = 35;
+const COVERAGE_GRID_METERS = 70;
 export const MAX_COVERAGE_SAMPLES = 500;
 const COVERAGE_SAMPLE_SPACING_KM = 0.05;
 
@@ -57,6 +57,14 @@ function buildCoverageGrid(points: VerifiedNetworkCoveragePoint[]) {
 }
 
 const coverageGrid = buildCoverageGrid(verifiedNetwork.coveragePoints);
+const dedupedBusAnchors = [...verifiedNetwork.busAnchors]
+  .sort((left, right) => left.id.localeCompare(right.id) || left.name.localeCompare(right.name))
+  .reduce<VerifiedNetworkBusAnchor[]>((anchors, anchor) => {
+    if (!anchors.some((existing) => existing.id === anchor.id)) {
+      anchors.push(anchor);
+    }
+    return anchors;
+  }, []);
 
 export function sampleRouteCoveragePoints(
   points: LatLng[],
@@ -136,7 +144,7 @@ export function getVerifiedNetwork() {
 }
 
 export function listVerifiedBusAnchors(): VerifiedNetworkBusAnchor[] {
-  return verifiedNetwork.busAnchors;
+  return dedupedBusAnchors;
 }
 
 export function listVerifiedNamedRoutes(): VerifiedNamedRoute[] {

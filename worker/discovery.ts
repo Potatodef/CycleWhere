@@ -4,7 +4,6 @@ import { homewardScore, medianHomeCentre } from "../src/lib/homeward.js";
 import { routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
 import {
   getVerifiedNetwork,
-  listVerifiedBusAnchors,
   listVerifiedCandidatePoints,
   measureRouteCoverage
 } from "../src/lib/verifiedNetwork.js";
@@ -14,7 +13,6 @@ import type {
   RouteCandidate,
   RouteSearchRequest,
   RoutingProfile,
-  TransportAnchor,
   ZoneDiscoveryStatus
 } from "../src/types.js";
 
@@ -62,7 +60,6 @@ const MIN_DIVERSE_ROUTE_BUCKETS = 6;
 const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 const RAIL_ANCHOR_RADIUS_KM = 1;
-const BUS_ANCHOR_RADIUS_KM = 0.4;
 const KM_TO_DEGREES = 1 / 110.574;
 
 function overlapRatio(a: string[], b: string[]) {
@@ -75,7 +72,7 @@ function overlapRatio(a: string[], b: string[]) {
 
 function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
   const overlap = overlapRatio(a.overlapSignature, b.overlapSignature);
-  const baseDistance = Math.max(a.distanceKm, 1);
+  const baseDistance = Math.max(a.distanceKm, b.distanceKm, 1);
   const distanceDelta = Math.abs(a.distanceKm - b.distanceKm) / baseDistance;
   return overlap >= 0.75 && distanceDelta < 0.2;
 }
@@ -96,21 +93,6 @@ function nearestEligibleAnchor(point: LatLng) {
     }
   }
 
-  let nearestBus: { anchor: ReturnType<typeof listVerifiedBusAnchors>[number]; distanceKm: number } | null = null;
-  for (const anchor of listVerifiedBusAnchors()) {
-    const maxDelta = BUS_ANCHOR_RADIUS_KM * KM_TO_DEGREES * 1.2;
-    if (
-      Math.abs(anchor.point.lat - point.lat) > maxDelta ||
-      Math.abs(anchor.point.lng - point.lng) > maxDelta
-    ) {
-      continue;
-    }
-    const distanceKm = haversineKm(point, anchor.point);
-    if (!nearestBus || distanceKm < nearestBus.distanceKm) {
-      nearestBus = { anchor, distanceKm };
-    }
-  }
-
   if (nearestRail && nearestRail.distanceKm <= RAIL_ANCHOR_RADIUS_KM) {
     return {
       anchor: {
@@ -119,20 +101,6 @@ function nearestEligibleAnchor(point: LatLng) {
         kind: "rail" as const,
         point: nearestRail.anchor.point,
         distanceFromHomeKm: nearestRail.distanceKm,
-        fallbackSuggested: false
-      },
-      eligible: true
-    };
-  }
-
-  if (nearestBus && nearestBus.distanceKm <= BUS_ANCHOR_RADIUS_KM) {
-    return {
-      anchor: {
-        id: nearestBus.anchor.id,
-        name: nearestBus.anchor.name,
-        kind: "bus" as const,
-        point: nearestBus.anchor.point,
-        distanceFromHomeKm: nearestBus.distanceKm,
         fallbackSuggested: false
       },
       eligible: true
@@ -179,6 +147,10 @@ function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
   const groups = new Map<string, Array<{ point: LatLng; id: string; nearbyFeatureIds: string[]; distanceKm: number }>>();
 
   for (const candidatePoint of listVerifiedCandidatePoints()) {
+    if (!nearestEligibleAnchor(candidatePoint.point).eligible) {
+      continue;
+    }
+
     const distanceKm = haversineKm(start, candidatePoint.point);
     if (distanceKm < MIN_ROUTE_DISTANCE_KM || distanceKm > MAX_GENERIC_DISTANCE_KM) {
       continue;
@@ -217,8 +189,8 @@ function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
   let appended = true;
   while (appended) {
     appended = false;
-    for (let band = 0; band < 3; band += 1) {
-      for (let sector = 0; sector < 8; sector += 1) {
+    for (let sector = 0; sector < 8; sector += 1) {
+      for (let band = 0; band < 3; band += 1) {
         const key = `${band}:${sector}`;
         const group = groups.get(key);
         if (!group?.length) {
@@ -258,7 +230,8 @@ function buildGenericCandidate(
   profile: RoutingProfile,
   requireOfficialCoverage = true
 ) {
-  const endpointAnchor = nearestEligibleAnchor(job.point);
+  const routeEndpoint = route.geometry.at(-1) ?? job.point;
+  const endpointAnchor = nearestEligibleAnchor(routeEndpoint);
   if (!endpointAnchor.eligible || !endpointAnchor.anchor) {
     return null;
   }
@@ -275,7 +248,7 @@ function buildGenericCandidate(
     profile,
     routeName: `${endpointAnchor.anchor.name} verified route`,
     endpointName: endpointAnchor.anchor.name,
-    endpoint: job.point,
+    endpoint: routeEndpoint,
     endpointAnchor: endpointAnchor.anchor,
     geometry: route.geometry,
     graphEdgeIds: route.graphEdgeIds,

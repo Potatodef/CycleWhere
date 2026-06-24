@@ -1,5 +1,6 @@
 import networkManifest from "../public/data/network-manifest.json";
 import verifiedNetwork from "../public/data/verified-network.json";
+import { listVerifiedBusAnchors } from "../src/lib/verifiedNetwork.js";
 
 describe("verified network asset", () => {
   it("contains only official datasets and named official routes", () => {
@@ -23,5 +24,11 @@ describe("verified network asset", () => {
     expect(networkManifest.candidatePointCount).toBe(verifiedNetwork.candidatePoints.length);
     expect(networkManifest.namedRouteCount).toBe(verifiedNetwork.namedRoutes.length);
     expect(networkManifest.busAnchorCount).toBe(verifiedNetwork.busAnchors.length);
+  });
+
+  it("deduplicates bus anchors exposed to route discovery by stop id", () => {
+    const busAnchors = listVerifiedBusAnchors();
+    expect(new Set(busAnchors.map((anchor) => anchor.id)).size).toBe(busAnchors.length);
+    expect(busAnchors.length).toBeLessThanOrEqual(verifiedNetwork.busAnchors.length);
   });
 });

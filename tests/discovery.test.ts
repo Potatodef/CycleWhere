@@ -169,6 +169,52 @@ describe("live discovery", () => {
     expect(result.liveDiscoveryStatus).toBe("partial");
   });
 
+  it("uses the routed geometry endpoint for candidate metadata", async () => {
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const routedEndpoint = { lat: 1.355, lng: 103.94388889 };
+    const fetchRoute = vi.fn(async () => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: 1.31, lng: 103.9 },
+        routedEndpoint
+      ],
+      distanceKm: 8,
+      durationMinutes: 24
+    }));
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        fetchRoute
+      }
+    );
+
+    expect(result.routes[0]?.endpoint).toEqual(routedEndpoint);
+    expect(result.routes[0]?.endpointName).toBe("Tampines MRT");
+  });
+
   it("keeps longer routes when verified coverage is strong even if mixed traffic meters are high", async () => {
     mockState.coverage.value = {
       verifiedCoverage: 0.68,

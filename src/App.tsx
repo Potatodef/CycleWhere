@@ -313,19 +313,7 @@ function RouteCard({
   onToggleDetails: (routeId: string) => void;
 }) {
   return (
-    <article
-      className={`route-card ${selectedRouteId === route.id ? "selected" : ""}`}
-      role="button"
-      aria-pressed={selectedRouteId === route.id}
-      onClick={() => onSelect(route.id)}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect(route.id);
-        }
-      }}
-      tabIndex={0}
-    >
+    <article className={`route-card ${selectedRouteId === route.id ? "selected" : ""}`}>
       <div className="route-card-head">
         <div>
           <div className="route-title-row">
@@ -343,6 +331,14 @@ function RouteCard({
         <div className="metric-cluster">
           <strong>{route.distanceKm.toFixed(1)} km</strong>
           <span>{formatMinutes(route.cyclingMinutes)}</span>
+          <button
+            type="button"
+            className="route-select-button"
+            aria-pressed={selectedRouteId === route.id}
+            onClick={() => onSelect(route.id)}
+          >
+            {selectedRouteId === route.id ? "Selected" : "Select route"}
+          </button>
         </div>
       </div>
 
@@ -448,6 +444,9 @@ export function App() {
   const workerRequestIdRef = useRef(0);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const filterDialogRef = useRef<HTMLDialogElement>(null);
+  const startInputRef = useRef<HTMLInputElement>(null);
+  const stationInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const dismissedStationFieldIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = "neutral-ink";
@@ -464,6 +463,11 @@ export function App() {
     filterDialogRef.current?.close();
     setShowRouteFilters(false);
     filterButtonRef.current?.focus();
+  }
+
+  function resetRouteFiltersAndClose() {
+    resetRouteFilters();
+    closeRouteFilters();
   }
 
   useEffect(() => {
@@ -676,6 +680,7 @@ export function App() {
   function updateParticipant(id: string, key: "name" | "station", value: string) {
     if (key === "station") {
       setInvalidStationIds((current) => current.filter((currentId) => currentId !== id));
+      dismissedStationFieldIdRef.current = null;
     }
     setParticipants((current) =>
       current.map((participant) =>
@@ -891,12 +896,26 @@ export function App() {
 
     setInvalidStartQuery(hasInvalidMeetup);
     setStartFieldMessage(
-      hasInvalidMeetup ? "Use a real meetup point that resolves to an actual place in Singapore." : null
+      hasInvalidMeetup
+        ? "Use a real meetup point that resolves to an actual place in Singapore."
+        : startResolution?.source === "fallback"
+          ? "Meetup resolved from fallback place data. Check the pinned start before riding."
+          : null
     );
     setInvalidStationIds(unresolvedStations);
 
     if (hasInvalidMeetup || unresolvedStations.length > 0 || hasPastDepartureTime) {
       setActiveStationFieldId(unresolvedStations[0] ?? null);
+      window.requestAnimationFrame(() => {
+        if (hasInvalidMeetup) {
+          startInputRef.current?.focus();
+          return;
+        }
+        const firstInvalidStation = unresolvedStations[0];
+        if (firstInvalidStation) {
+          stationInputRefs.current[firstInvalidStation]?.focus();
+        }
+      });
       setMessage(
         hasPastDepartureTime
           ? "Pick a departure time that is now or later before planning."
@@ -1151,8 +1170,10 @@ export function App() {
                 <span>Meetup point</span>
                 <div className="field-inline">
                   <input
+                    ref={startInputRef}
                     className={invalidStartQuery ? "invalid-input" : undefined}
                     aria-invalid={invalidStartQuery}
+                    aria-describedby={startFieldMessage ? "meetup-point-error" : undefined}
                     value={startQuery}
                     onChange={(event) => {
                       setInvalidStartQuery(false);
@@ -1171,7 +1192,7 @@ export function App() {
                     {isLocatingStart ? "Locating..." : "Use current location"}
                   </button>
                 </div>
-                {startFieldMessage ? <span className="field-error">{startFieldMessage}</span> : null}
+                {startFieldMessage ? <span id="meetup-point-error" className="field-error">{startFieldMessage}</span> : null}
               </label>
               <div className="start-card-foot">
                 <span className="time-chip">Used for every route option</span>
@@ -1296,11 +1317,21 @@ export function App() {
                           }}
                         >
                           <input
+                            ref={(element) => {
+                              stationInputRefs.current[participant.id] = element;
+                            }}
                             maxLength={60}
                             className={invalidStationIds.includes(participant.id) ? "invalid-input" : undefined}
                             aria-invalid={invalidStationIds.includes(participant.id)}
+                            aria-describedby={invalidStationIds.includes(participant.id) ? `station-error-${participant.id}` : undefined}
                             value={participant.station}
-                            onFocus={() => setActiveStationFieldId(participant.id)}
+                            onFocus={() => {
+                              if (dismissedStationFieldIdRef.current === participant.id) {
+                                dismissedStationFieldIdRef.current = null;
+                                return;
+                              }
+                              setActiveStationFieldId(participant.id);
+                            }}
                             onChange={(event) => {
                               updateParticipant(participant.id, "station", event.target.value);
                               setActiveStationFieldId(participant.id);
@@ -1308,6 +1339,7 @@ export function App() {
                             onKeyDown={(event) => {
                               if (event.key === "Escape") {
                                 event.preventDefault();
+                                dismissedStationFieldIdRef.current = participant.id;
                                 setActiveStationFieldId(null);
                                 return;
                               }
@@ -1322,7 +1354,7 @@ export function App() {
                             placeholder="Bedok MRT"
                           />
                           {invalidStationIds.includes(participant.id) ? (
-                            <span className="field-error">Pick one MRT/LRT station from the suggested list.</span>
+                            <span id={`station-error-${participant.id}`} className="field-error">Pick one MRT/LRT station from the suggested list.</span>
                           ) : null}
                           {activeStationFieldId === participant.id ? (
                             <div className="station-suggestions" aria-label={`Suggested stations for rider ${index + 1}`}>
@@ -1343,6 +1375,7 @@ export function App() {
                                     }
                                     if (event.key === "Escape") {
                                       event.preventDefault();
+                                      dismissedStationFieldIdRef.current = participant.id;
                                       setActiveStationFieldId(null);
                                       event.currentTarget
                                         .closest(".field-with-suggestions")
@@ -1614,9 +1647,9 @@ export function App() {
               <button
                 type="button"
                 className="primary-button dark"
-                onClick={allRouteCount > 0 ? closeRouteFilters : resetRouteFilters}
+                onClick={allRouteCount > 0 ? closeRouteFilters : resetRouteFiltersAndClose}
               >
-                {allRouteCount > 0 ? `Show ${allRouteCount} routes` : "No routes match - reset filters"}
+                {allRouteCount > 0 ? `Show ${allRouteCount} routes` : "Reset filters"}
               </button>
             </div>
         </dialog>
