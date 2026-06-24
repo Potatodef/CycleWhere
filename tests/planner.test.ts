@@ -161,6 +161,32 @@ describe("planner", () => {
     expect(routes.sections[0]?.routes[0]?.id).toBe("best");
   });
 
+  it("lets exact fairness outrank original search rank", () => {
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "server-first", searchRank: 0, overlapSignature: ["server-first"] }),
+        routeCandidate({ id: "fairer-exact", searchRank: 1, overlapSignature: ["fairer-exact"] })
+      ],
+      participants: [
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      transitOverrides: {
+        "server-first::a": 10,
+        "server-first::b": 25,
+        "fairer-exact::a": 16,
+        "fairer-exact::b": 20
+      },
+      liveDiscoveryStatus: "available"
+    });
+
+    expect(routes.sections[0]?.routes.map((route) => route.id).slice(0, 2)).toEqual([
+      "fairer-exact",
+      "server-first"
+    ]);
+  });
+
   it("prefers a fair route with a shorter journey home and keeps uneven alternatives", () => {
     const routes = planRoutes({
       candidates: [
@@ -207,6 +233,42 @@ describe("planner", () => {
         routeCandidate({ id: "route-1", overlapSignature: ["a", "b", "c"], distanceKm: 8 }),
         routeCandidate({ id: "route-2", overlapSignature: ["a", "b", "c"], distanceKm: 8.4 }),
         routeCandidate({ id: "route-3", overlapSignature: ["x", "y", "z"], distanceKm: 14 })
+      ],
+      participants: [
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    const ids = routes.sections.flatMap((section) => section.routes.map((route) => route.id));
+    expect(ids).toContain("route-1");
+    expect(ids).not.toContain("route-2");
+    expect(ids).toContain("route-3");
+  });
+
+  it("recomputes empty route signatures before diversity filtering", () => {
+    const sharedGeometry = [
+      { lat: 1.2808, lng: 103.8545 },
+      { lat: 1.295, lng: 103.87 },
+      { lat: 1.31, lng: 103.88 }
+    ];
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "route-1", overlapSignature: [], geometry: sharedGeometry, distanceKm: 8 }),
+        routeCandidate({ id: "route-2", overlapSignature: [], geometry: sharedGeometry, distanceKm: 8.4 }),
+        routeCandidate({
+          id: "route-3",
+          overlapSignature: [],
+          geometry: [
+            { lat: 1.2808, lng: 103.8545 },
+            { lat: 1.29, lng: 103.84 },
+            { lat: 1.31, lng: 103.82 }
+          ],
+          distanceKm: 14
+        })
       ],
       participants: [
         participant("a", "A", 1.3249, 103.9303),

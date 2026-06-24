@@ -1,6 +1,7 @@
 import { railStationSeeds } from "../src/lib/anchors.js";
 import { haversineKm } from "../src/lib/geo.js";
 import { homewardScore, medianHomeCentre } from "../src/lib/homeward.js";
+import { routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
 import {
   getVerifiedNetwork,
   listVerifiedBusAnchors,
@@ -60,20 +61,9 @@ const DISCOVERY_BATCH_SIZE = 5;
 const MIN_DIVERSE_ROUTE_BUCKETS = 6;
 const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
-
-function routeSignature(points: LatLng[]) {
-  const signature = [];
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1];
-    const current = points[index];
-    signature.push(
-      `${previous.lat.toFixed(3)},${previous.lng.toFixed(3)}->${current.lat.toFixed(
-        3
-      )},${current.lng.toFixed(3)}`
-    );
-  }
-  return signature;
-}
+const RAIL_ANCHOR_RADIUS_KM = 1;
+const BUS_ANCHOR_RADIUS_KM = 0.4;
+const KM_TO_DEGREES = 1 / 110.574;
 
 function overlapRatio(a: string[], b: string[]) {
   const aSet = new Set(a);
@@ -90,22 +80,38 @@ function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
   return overlap >= 0.75 && distanceDelta < 0.2;
 }
 
-function routeQualityScore(candidate: RouteCandidate) {
-  const verifiedCoverage = candidate.verifiedCoverage ?? 0;
-  const protectedCoverage = (candidate.pcnCoverage ?? 0) + (candidate.cyclingPathCoverage ?? 0);
-  const mixedTrafficPenalty = (candidate.mixedTrafficMeters ?? 0) / 80;
-  return Math.round(verifiedCoverage * 70 + protectedCoverage * 20 - mixedTrafficPenalty);
-}
-
 function nearestEligibleAnchor(point: LatLng) {
-  const nearestRail = railStationSeeds
-    .map((anchor) => ({ anchor, distanceKm: haversineKm(point, anchor.point) }))
-    .sort((left, right) => left.distanceKm - right.distanceKm)[0];
-  const nearestBus = listVerifiedBusAnchors()
-    .map((anchor) => ({ anchor, distanceKm: haversineKm(point, anchor.point) }))
-    .sort((left, right) => left.distanceKm - right.distanceKm)[0];
+  let nearestRail: { anchor: (typeof railStationSeeds)[number]; distanceKm: number } | null = null;
+  for (const anchor of railStationSeeds) {
+    const maxDelta = RAIL_ANCHOR_RADIUS_KM * KM_TO_DEGREES * 1.2;
+    if (
+      Math.abs(anchor.point.lat - point.lat) > maxDelta ||
+      Math.abs(anchor.point.lng - point.lng) > maxDelta
+    ) {
+      continue;
+    }
+    const distanceKm = haversineKm(point, anchor.point);
+    if (!nearestRail || distanceKm < nearestRail.distanceKm) {
+      nearestRail = { anchor, distanceKm };
+    }
+  }
 
-  if (nearestRail && nearestRail.distanceKm <= 1) {
+  let nearestBus: { anchor: ReturnType<typeof listVerifiedBusAnchors>[number]; distanceKm: number } | null = null;
+  for (const anchor of listVerifiedBusAnchors()) {
+    const maxDelta = BUS_ANCHOR_RADIUS_KM * KM_TO_DEGREES * 1.2;
+    if (
+      Math.abs(anchor.point.lat - point.lat) > maxDelta ||
+      Math.abs(anchor.point.lng - point.lng) > maxDelta
+    ) {
+      continue;
+    }
+    const distanceKm = haversineKm(point, anchor.point);
+    if (!nearestBus || distanceKm < nearestBus.distanceKm) {
+      nearestBus = { anchor, distanceKm };
+    }
+  }
+
+  if (nearestRail && nearestRail.distanceKm <= RAIL_ANCHOR_RADIUS_KM) {
     return {
       anchor: {
         id: nearestRail.anchor.id,
@@ -119,7 +125,7 @@ function nearestEligibleAnchor(point: LatLng) {
     };
   }
 
-  if (nearestBus && nearestBus.distanceKm <= 0.4) {
+  if (nearestBus && nearestBus.distanceKm <= BUS_ANCHOR_RADIUS_KM) {
     return {
       anchor: {
         id: nearestBus.anchor.id,
@@ -335,7 +341,7 @@ async function backfillRouteVariety({
 
   const attempted = new Set(pageJobs.map((job) => job.id));
   const remainingJobs = genericJobs
-    .filter((job) => !attempted.has(job.id) && nearestEligibleAnchor(job.point).eligible)
+    .filter((job) => !attempted.has(job.id))
     .sort((left, right) => {
       const leftBucketCovered = routeBuckets.has(routeBucketKey(start, left.point)) ? 1 : 0;
       const rightBucketCovered = routeBuckets.has(routeBucketKey(start, right.point)) ? 1 : 0;
@@ -347,6 +353,9 @@ async function backfillRouteVariety({
   for (const job of remainingJobs) {
     if (attempts >= maxAttempts || routeBuckets.size >= targetBuckets) {
       break;
+    }
+    if (!nearestEligibleAnchor(job.point).eligible) {
+      continue;
     }
     attempts += 1;
 
@@ -431,11 +440,17 @@ export async function discoverCyclingRoutes(
 
   if (routes.length === 0) {
     const attempted = new Set(pageJobs.map((job) => job.id));
-    const fallbackJobs = genericJobs
-      .filter((job) => !attempted.has(job.id) && nearestEligibleAnchor(job.point).eligible)
-      .slice(0, deps.maxFallbackEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
+    const maxFallbackAttempts = deps.maxFallbackEndpoints ?? MAX_DISCOVERY_ENDPOINTS;
+    let fallbackAttempts = 0;
 
-    for (const job of fallbackJobs) {
+    for (const job of genericJobs) {
+      if (fallbackAttempts >= maxFallbackAttempts) {
+        break;
+      }
+      if (attempted.has(job.id) || !nearestEligibleAnchor(job.point).eligible) {
+        continue;
+      }
+      fallbackAttempts += 1;
       const route = await deps
         .fetchRoute({ start: request.start.point, end: job.point, profile: "bicycle" })
         .catch(() => null);

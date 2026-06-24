@@ -13,6 +13,10 @@ describe("rail station seeds", () => {
     expect(findRailStation("Choa Chu Kang MRT")?.name).toBe("Choa Chu Kang MRT/LRT");
   });
 
+  it("does not accept arbitrary substrings as station matches", () => {
+    expect(findRailStation("ines")).toBeNull();
+  });
+
   it("treats nonsense meetup inputs as low-confidence fallbacks", () => {
     expect(fallbackResolve("NotARealPlaceZXQ123").confidence).toBe("low");
   });

@@ -63,6 +63,19 @@ async function sign(value: string, secret: string) {
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
+function constantTimeEqual(left: string, right: string) {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  if (leftBytes.length !== rightBytes.length) {
+    return false;
+  }
+  let difference = 0;
+  for (let index = 0; index < leftBytes.length; index += 1) {
+    difference |= leftBytes[index] ^ rightBytes[index];
+  }
+  return difference === 0;
+}
+
 export async function hashRequest(value: unknown) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -75,7 +88,11 @@ export async function createPageToken(payload: PageTokenPayload, secret: string)
 
 export async function readPageToken(token: string, secret: string): Promise<PageTokenPayload | null> {
   const [encoded, signature] = token.split(".");
-  if (!encoded || !signature || (await sign(encoded, secret)) !== signature) {
+  if (!encoded || !signature) {
+    return null;
+  }
+  const expectedSignature = await sign(encoded, secret);
+  if (!constantTimeEqual(expectedSignature, signature)) {
     return null;
   }
   try {

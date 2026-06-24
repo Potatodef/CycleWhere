@@ -3,8 +3,6 @@ import type { LatLng, RoutingProfile } from "../../src/types.js";
 type GraphHopperEnv = {
   GRAPHHOPPER_BASE_URL?: string;
   GRAPHHOPPER_API_KEY?: string;
-  // Temporary compatibility for a misnamed secret in production.
-  GRAPHOPPER_API_KEY?: string;
   GRAPHHOPPER_BEARER_TOKEN?: string;
   GRAPHHOPPER_PROFILE_OFFICIAL?: string;
   GRAPHHOPPER_PROFILE_QUIET?: string;
@@ -29,7 +27,7 @@ type GraphHopperNearestResponse = {
 };
 
 function graphHopperApiKey(env: GraphHopperEnv) {
-  return env.GRAPHHOPPER_API_KEY ?? env.GRAPHOPPER_API_KEY;
+  return env.GRAPHHOPPER_API_KEY;
 }
 
 function hostedApiEnabled(env: GraphHopperEnv) {

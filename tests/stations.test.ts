@@ -9,4 +9,8 @@ describe("getStationRecommendations", () => {
   it("accepts MRT-only input for MRT/LRT stations", () => {
     expect(findExactStation("Bukit Panjang MRT")?.name).toBe("Bukit Panjang MRT/LRT");
   });
+
+  it("does not accept arbitrary substrings as exact station matches", () => {
+    expect(findExactStation("ines")).toBeNull();
+  });
 });

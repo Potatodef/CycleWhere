@@ -170,7 +170,7 @@ describe("GraphHopper route provenance", () => {
     });
   });
 
-  it("accepts the legacy single-h secret name for hosted API mode", async () => {
+  it("rejects the legacy single-h secret name", async () => {
     const fetchSpy = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -188,15 +188,17 @@ describe("GraphHopper route provenance", () => {
     );
     vi.stubGlobal("fetch", fetchSpy);
 
-    await fetchRouteWithGraphHopper(
-      {
-        start: { lat: 1.3, lng: 103.8 },
-        end: { lat: 1.34, lng: 103.85 },
-        profile: "bicycle"
-      },
-      { GRAPHOPPER_API_KEY: "legacy-key" }
-    );
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHOPPER_API_KEY: "legacy-key" } as unknown as Parameters<typeof fetchRouteWithGraphHopper>[1]
+      )
+    ).rejects.toThrow("GraphHopper is not configured");
 
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

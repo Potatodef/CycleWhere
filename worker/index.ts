@@ -36,8 +36,6 @@ type Bindings = {
   ONEMAP_BASE_URL?: string;
   GRAPHHOPPER_BASE_URL?: string;
   GRAPHHOPPER_API_KEY?: string;
-  // Temporary compatibility for a misnamed secret in production.
-  GRAPHOPPER_API_KEY?: string;
   GRAPHHOPPER_BEARER_TOKEN?: string;
   GRAPHHOPPER_PROFILE_OFFICIAL?: string;
   GRAPHHOPPER_PROFILE_QUIET?: string;
@@ -55,7 +53,7 @@ const MAX_TRANSIT_QUERIES = 40;
 const MAX_PARTICIPANTS = 10;
 
 function hasRoutingProvider(env: Bindings | undefined) {
-  return Boolean(env?.GRAPHHOPPER_BASE_URL || env?.GRAPHHOPPER_API_KEY || env?.GRAPHOPPER_API_KEY);
+  return Boolean(env?.GRAPHHOPPER_BASE_URL || env?.GRAPHHOPPER_API_KEY);
 }
 
 function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
@@ -96,8 +94,8 @@ async function getCachedTransit(
     return null;
   }
   const row = await database
-    .prepare("SELECT minutes FROM transit_cache WHERE cache_key = ?")
-    .bind(key)
+    .prepare("SELECT minutes FROM transit_cache WHERE cache_key = ? AND updated_at > ?")
+    .bind(key, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
     .first<{ minutes: number }>();
   return row?.minutes ?? null;
 }
@@ -158,10 +156,14 @@ function roundedKey(point: { lat: number; lng: number }) {
 }
 
 function transitCacheKey(query: TransitTimeQuery) {
+  const departureMs = new Date(query.departureIso).getTime();
+  const roundedDepartureIso = Number.isNaN(departureMs)
+    ? query.departureIso
+    : new Date(Math.round(departureMs / 300_000) * 300_000).toISOString();
   return [
     roundedKey(query.from),
     roundedKey(query.to),
-    query.departureIso,
+    roundedDepartureIso,
     query.modeHint
   ].join("|");
 }
@@ -282,6 +284,7 @@ app.post("/api/route-searches", async (context) => {
     );
   }
 
+  let routeSearchRequestId: string | null = null;
   try {
     const snappedStart = await snapMeetupWithGraphHopper(payload.start.point, context.env);
     if (!snappedStart) {
@@ -294,11 +297,20 @@ app.post("/api/route-searches", async (context) => {
       ...payload,
       start: { ...payload.start, point: snappedStart.point }
     };
+    const searchId = crypto.randomUUID();
+    routeSearchRequestId = searchId;
+    const routeSearchStartedAt = Date.now();
+    console.log("Route search started", {
+      requestId: searchId,
+      start: roundedKey(normalizedPayload.start.point),
+      participantCount: normalizedPayload.participants.length,
+      hostedGraphHopper: Boolean(context.env.GRAPHHOPPER_API_KEY)
+    });
     const result = await discoverCyclingRoutes(normalizedPayload, {
-      routingProfiles: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? ["bicycle"] : undefined,
-      maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
-      maxDiversityBackfillEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 6 : undefined,
-      maxFallbackEndpoints: context.env.GRAPHHOPPER_API_KEY || context.env.GRAPHOPPER_API_KEY ? 4 : undefined,
+      routingProfiles: context.env.GRAPHHOPPER_API_KEY ? ["bicycle"] : undefined,
+      maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY ? 6 : undefined,
+      maxDiversityBackfillEndpoints: context.env.GRAPHHOPPER_API_KEY ? 2 : undefined,
+      maxFallbackEndpoints: context.env.GRAPHHOPPER_API_KEY ? 4 : undefined,
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
           version: 4,
@@ -328,8 +340,15 @@ app.post("/api/route-searches", async (context) => {
         return route;
       }
     });
-
-    const searchId = crypto.randomUUID();
+    console.log("Route search discovery completed", {
+      requestId: searchId,
+      durationMs: Date.now() - routeSearchStartedAt,
+      routeCount: result.routes.length,
+      diagnosticsCount: result.diagnostics.length,
+      maxGeometryPoints: Math.max(0, ...result.routes.map((route) => route.geometry.length)),
+      totalGeometryPoints: result.routes.reduce((total, route) => total + route.geometry.length, 0),
+      liveDiscoveryStatus: result.liveDiscoveryStatus
+    });
     const expiresAt = newSearchExpiry();
     const resolvedParticipants = normalizedPayload.participants.map(
       (participant) =>
@@ -360,6 +379,7 @@ app.post("/api/route-searches", async (context) => {
       .concat(result.routes.filter((candidate) => !acceptedIds.has(candidate.id)).map((candidate) => candidate.id));
     const materializedRoutes = prioritizedRouteIds.map((routeId, searchRank) => ({
       ...result.routes.find((candidate) => candidate.id === routeId)!,
+      overlapSignature: [],
       searchRank
     }));
     const diagnostics = result.diagnostics.concat(
@@ -394,7 +414,10 @@ app.post("/api/route-searches", async (context) => {
       await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET)
     );
   } catch (error) {
-    console.error("Route search failed", error);
+    console.error("Route search failed", {
+      requestId: routeSearchRequestId,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return context.json<RouteSearchError>(
       { error: "The routing service could not complete this search.", code: "routing_unavailable" },
       503
