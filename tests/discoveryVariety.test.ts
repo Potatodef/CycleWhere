@@ -23,7 +23,7 @@ function bucketKey(start: LatLng, end: LatLng) {
 }
 
 describe("real network discovery variety", () => {
-  it("generates multiple route buckets from the production verified-network candidates", async () => {
+  it("keeps hosted-safe route variety from the production verified-network candidates", async () => {
     const request: RouteSearchRequest = {
       start: {
         label: "Marina Bay",
@@ -75,7 +75,8 @@ describe("real network discovery variety", () => {
 
     const result = await discoverCyclingRoutes(request, {
       maxDiscoveryEndpoints: 6,
-      maxDiversityBackfillEndpoints: 6,
+      maxDiversityBackfillEndpoints: 2,
+      minDiverseRouteBuckets: 4,
       routingProfiles: ["bicycle"],
       fetchRoute: async ({ start, end }) => {
         const distanceKm = haversineKm(start, end);

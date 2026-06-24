@@ -64,11 +64,13 @@ describe("route-search worker", () => {
     let maxDiscoveryEndpoints: number | undefined = 0;
     let maxDiversityBackfillEndpoints: number | undefined = 0;
     let maxFallbackEndpoints: number | undefined = 0;
+    let minDiverseRouteBuckets: number | undefined = 0;
     let routingProfiles: string[] | undefined;
     discoverCyclingRoutes.mockImplementationOnce(async (_request, deps) => {
       maxDiscoveryEndpoints = deps.maxDiscoveryEndpoints;
       maxDiversityBackfillEndpoints = deps.maxDiversityBackfillEndpoints;
       maxFallbackEndpoints = deps.maxFallbackEndpoints;
+      minDiverseRouteBuckets = deps.minDiverseRouteBuckets;
       routingProfiles = deps.routingProfiles;
       return {
         routes: [candidate()],
@@ -114,8 +116,9 @@ describe("route-search worker", () => {
 
     expect(response.status).toBe(200);
     expect(maxDiscoveryEndpoints).toBe(6);
-    expect(maxDiversityBackfillEndpoints).toBe(6);
+    expect(maxDiversityBackfillEndpoints).toBe(2);
     expect(maxFallbackEndpoints).toBe(4);
+    expect(minDiverseRouteBuckets).toBe(4);
     expect(routingProfiles).toEqual(["bicycle"]);
   });
 

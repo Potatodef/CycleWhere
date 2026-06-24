@@ -7,6 +7,7 @@ import { estimateTransitMinutes } from "../src/lib/transit.js";
 import type {
   GeocodeResponse,
   ResolvedParticipant,
+  RoutingProfile,
   RouteSearchError,
   RouteSearchRequest,
   RouteSearchResult,
@@ -51,6 +52,13 @@ export const app = new Hono<{ Bindings: Bindings }>();
 const MAX_GEOCODE_QUERIES = 12;
 const MAX_TRANSIT_QUERIES = 40;
 const MAX_PARTICIPANTS = 10;
+const HOSTED_GRAPHHOPPER_LIMITS = {
+  routingProfiles: ["bicycle"] as RoutingProfile[],
+  maxDiscoveryEndpoints: 6,
+  maxDiversityBackfillEndpoints: 2,
+  maxFallbackEndpoints: 4,
+  minDiverseRouteBuckets: 4
+};
 
 function hasRoutingProvider(env: Bindings | undefined) {
   return Boolean(env?.GRAPHHOPPER_BASE_URL || env?.GRAPHHOPPER_API_KEY);
@@ -306,11 +314,13 @@ app.post("/api/route-searches", async (context) => {
       participantCount: normalizedPayload.participants.length,
       hostedGraphHopper: Boolean(context.env.GRAPHHOPPER_API_KEY)
     });
+    const hostedLimits = context.env.GRAPHHOPPER_API_KEY ? HOSTED_GRAPHHOPPER_LIMITS : null;
     const result = await discoverCyclingRoutes(normalizedPayload, {
-      routingProfiles: context.env.GRAPHHOPPER_API_KEY ? ["bicycle"] : undefined,
-      maxDiscoveryEndpoints: context.env.GRAPHHOPPER_API_KEY ? 6 : undefined,
-      maxDiversityBackfillEndpoints: context.env.GRAPHHOPPER_API_KEY ? 2 : undefined,
-      maxFallbackEndpoints: context.env.GRAPHHOPPER_API_KEY ? 4 : undefined,
+      routingProfiles: hostedLimits?.routingProfiles,
+      maxDiscoveryEndpoints: hostedLimits?.maxDiscoveryEndpoints,
+      maxDiversityBackfillEndpoints: hostedLimits?.maxDiversityBackfillEndpoints,
+      maxFallbackEndpoints: hostedLimits?.maxFallbackEndpoints,
+      minDiverseRouteBuckets: hostedLimits?.minDiverseRouteBuckets,
       fetchRoute: async ({ start, end, profile }) => {
         const cacheKey = JSON.stringify({
           version: 4,
