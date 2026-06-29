@@ -1,35 +1,35 @@
 {
-  "version": "2026-06-21",
+  "version": "2026-06-29",
   "datasets": [
     {
       "name": "LTA Cycling Path Network",
       "datasetId": "d_8f468b25193f64be8a16fa7d8f60f553",
       "kind": "cycling-path",
-      "verifiedOn": "2026-06-21"
+      "verifiedOn": "2026-06-29"
     },
     {
       "name": "Park Connector Loop",
       "datasetId": "d_a69ef89737379f231d2ae93fd1c5707f",
       "kind": "park-connector",
-      "verifiedOn": "2026-06-21"
+      "verifiedOn": "2026-06-29"
     },
     {
       "name": "Round Island Route",
       "datasetId": "nparks:park-connector-trails:round-island-route",
       "kind": "official-route",
-      "verifiedOn": "2026-06-21"
+      "verifiedOn": "2026-06-29"
     },
     {
       "name": "Rail Corridor",
       "datasetId": "nparks:park-connector-trails:rail-corridor",
       "kind": "official-route",
-      "verifiedOn": "2026-06-21"
+      "verifiedOn": "2026-06-29"
     },
     {
       "name": "Eastern Corridor",
       "datasetId": "nparks:park-connector-trails:eastern-corridor",
       "kind": "official-route",
-      "verifiedOn": "2026-06-21"
+      "verifiedOn": "2026-06-29"
     }
   ],
   "sourcePolicy": "Official Singapore cycling routes only: LTA cycling paths, NParks park connector loops, selected named official corridors, and LTA bus stops for static anchor checks.",
