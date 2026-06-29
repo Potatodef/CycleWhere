@@ -1112,8 +1112,8 @@ export function App() {
   }
 
   function selectStationSuggestion(participant: ParticipantInput, index: number, stationName: string) {
-    dismissedStationFieldIdRef.current = participant.id;
     updateParticipant(participant.id, "station", stationName);
+    dismissedStationFieldIdRef.current = participant.id;
     setActiveStationFieldId(null);
     setMessage(`${participant.name || `Rider ${index + 1}`} pinned to ${stationName}.`);
     window.setTimeout(() => {
@@ -1280,6 +1280,8 @@ export function App() {
             <div className="participant-list">
               {participants.map((participant, index) => {
                 const colors = participantStyles[participant.id];
+                const stationSuggestionListId = `station-suggestions-${participant.id}`;
+                const isStationSuggestionOpen = activeStationFieldId === participant.id;
 
                 return (
                   <div
@@ -1340,6 +1342,11 @@ export function App() {
                               stationInputRefs.current[participant.id] = element;
                             }}
                             maxLength={60}
+                            role="combobox"
+                            aria-autocomplete="list"
+                            aria-expanded={isStationSuggestionOpen}
+                            aria-haspopup="listbox"
+                            aria-controls={isStationSuggestionOpen ? stationSuggestionListId : undefined}
                             className={invalidStationIds.includes(participant.id) ? "invalid-input" : undefined}
                             aria-invalid={invalidStationIds.includes(participant.id)}
                             aria-describedby={invalidStationIds.includes(participant.id) ? `station-error-${participant.id}` : undefined}
@@ -1375,12 +1382,19 @@ export function App() {
                           {invalidStationIds.includes(participant.id) ? (
                             <span id={`station-error-${participant.id}`} className="field-error">Pick one MRT/LRT station from the suggested list.</span>
                           ) : null}
-                          {activeStationFieldId === participant.id ? (
-                            <div className="station-suggestions" aria-label={`Suggested stations for rider ${index + 1}`}>
+                          {isStationSuggestionOpen ? (
+                            <div
+                              id={stationSuggestionListId}
+                              className="station-suggestions"
+                              role="listbox"
+                              aria-label={`Suggested stations for rider ${index + 1}`}
+                            >
                               {getStationRecommendations(participant.station).map((stationName) => (
                                 <button
                                   key={stationName}
                                   type="button"
+                                  role="option"
+                                  aria-selected={stationName === findExactStation(participant.station)?.name}
                                   className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
                                   onMouseDown={(event) => event.preventDefault()}
                                   onKeyDown={(event) => {
@@ -1464,7 +1478,12 @@ export function App() {
             {hasPreviewMapData ? (
               <Suspense
                 fallback={
-                  <div className="map-shell map-fallback map-loading" aria-label="Route preview loading">
+                  <div
+                    className="map-shell map-fallback map-loading"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Route preview loading"
+                  >
                     <div className="map-fallback-copy">
                       <strong>Loading route preview</strong>
                       <span>The route cards are ready. The map will follow in a moment.</span>
@@ -1483,7 +1502,7 @@ export function App() {
                 />
               </Suspense>
             ) : (
-              <div className="map-shell map-fallback" aria-label="Route preview waiting">
+              <div className="map-shell map-fallback" role="region" aria-label="Route preview waiting">
                 <div className="map-fallback-copy">
                   <strong>Map preview appears after you plan</strong>
                   <span>
@@ -1534,6 +1553,9 @@ export function App() {
                   </button>
                   <div
                     className="results-toolbar-copy"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
                     aria-label={`${allRouteCount} shown. ${hasActiveRouteFilters ? routeFilterSummary : "Showing every route option."}`}
                   >
                     <strong>{allRouteCount} shown.</strong>{" "}
@@ -1599,7 +1621,7 @@ export function App() {
                 ) : null}
               </>
             ) : status === "planning" ? (
-              <div className="route-loading-skeleton" aria-label="Route cards loading">
+              <div className="route-loading-skeleton" role="status" aria-live="polite" aria-label="Route cards loading">
                 <span />
                 <span />
                 <span />

@@ -43,6 +43,28 @@ describe("immutable route-search pages", () => {
     expect(await readPageToken(`${token}x`, "test-secret")).toBeNull();
   });
 
+  it("rejects a page token with extra segments", async () => {
+    const token = await createPageToken(
+      { sessionId: "search", startIndex: 6, expiresAt: newSearchExpiry(), graphVersion: "v1" },
+      "test-secret"
+    );
+    expect(await readPageToken(`${token}.extra`, "test-secret")).toBeNull();
+  });
+
+  it("rejects a signed token with malformed paging fields", async () => {
+    const token = await createPageToken(
+      {
+        sessionId: "",
+        startIndex: 6,
+        expiresAt: "not-a-date",
+        graphVersion: "v1"
+      },
+      "test-secret"
+    );
+
+    expect(await readPageToken(token, "test-secret")).toBeNull();
+  });
+
   it("returns byte-equivalent pages for the same immutable cursor", async () => {
     const search: MaterializedRouteSearch = {
       searchId: "search",

@@ -87,7 +87,11 @@ export async function createPageToken(payload: PageTokenPayload, secret: string)
 }
 
 export async function readPageToken(token: string, secret: string): Promise<PageTokenPayload | null> {
-  const [encoded, signature] = token.split(".");
+  const tokenParts = token.split(".");
+  if (tokenParts.length !== 2) {
+    return null;
+  }
+  const [encoded, signature] = tokenParts;
   if (!encoded || !signature) {
     return null;
   }
@@ -97,7 +101,16 @@ export async function readPageToken(token: string, secret: string): Promise<Page
   }
   try {
     const payload = JSON.parse(decodeBase64Url(encoded)) as PageTokenPayload;
-    return Number.isInteger(payload.startIndex) && payload.startIndex >= 0 ? payload : null;
+    return typeof payload.sessionId === "string" &&
+      payload.sessionId.length > 0 &&
+      Number.isInteger(payload.startIndex) &&
+      payload.startIndex >= 0 &&
+      typeof payload.expiresAt === "string" &&
+      Number.isFinite(new Date(payload.expiresAt).getTime()) &&
+      typeof payload.graphVersion === "string" &&
+      payload.graphVersion.length > 0
+      ? payload
+      : null;
   } catch {
     return null;
   }

@@ -35,6 +35,7 @@ Instead of only asking "what is the nicest route?", it also asks:
 
 - Live site: [cyclewhere.pages.dev](https://cyclewhere.pages.dev)
 - Production API: [cyclewhere-api-production.cyclewhere.workers.dev](https://cyclewhere-api-production.cyclewhere.workers.dev/api/health)
+- `VITE_API_BASE` should normally be unset for Pages deploys so the frontend uses the production API default. If it is set, keep it aligned with `public/_headers` `connect-src`; the legacy `https://cyclewhere.workers.dev` host is intentionally rejected by deploy CI.
 
 ## Notes
 

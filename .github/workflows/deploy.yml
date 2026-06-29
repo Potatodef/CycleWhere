@@ -5,6 +5,9 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: true
@@ -28,6 +31,7 @@ jobs:
 
   deploy-pages:
     runs-on: ubuntu-latest
+    needs: deploy-worker
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -40,6 +44,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Reject stale API base
+        run: |
+          if [ "$VITE_API_BASE" = "https://cyclewhere.workers.dev" ]; then
+            echo "VITE_API_BASE points at the legacy Worker host; use https://cyclewhere-api-production.cyclewhere.workers.dev or leave it unset."
+            exit 1
+          fi
       - run: npm run build
       - run: test -n "$CLOUDFLARE_PAGES_PROJECT"
       - run: npx wrangler whoami

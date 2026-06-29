@@ -26,6 +26,13 @@ type GraphHopperNearestResponse = {
   distance?: number;
 };
 
+type NormalizedGraphHopperRoute = {
+  geometry: LatLng[];
+  graphEdgeIds?: string[];
+  distanceKm: number;
+  durationMinutes: number;
+};
+
 function graphHopperApiKey(env: GraphHopperEnv) {
   return env.GRAPHHOPPER_API_KEY;
 }
@@ -48,6 +55,44 @@ function routeProfile(env: GraphHopperEnv, profile: RoutingProfile) {
     cycling: env.GRAPHHOPPER_PROFILE_BICYCLE ?? "cyclewhere_bicycle"
   };
   return profiles[profile] ?? profiles.bicycle;
+}
+
+function isFiniteCoordinatePair(value: unknown): value is [number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 2 &&
+    typeof value[0] === "number" &&
+    Number.isFinite(value[0]) &&
+    typeof value[1] === "number" &&
+    Number.isFinite(value[1])
+  );
+}
+
+function normalizeGraphHopperPath(
+  path: GraphHopperPath | undefined,
+  { requireEdgeIds }: { requireEdgeIds: boolean }
+): NormalizedGraphHopperRoute | null {
+  if (!path?.points.coordinates?.length) {
+    return null;
+  }
+  if (!Number.isFinite(path.distance) || path.distance <= 0 || !Number.isFinite(path.time) || path.time < 0) {
+    return null;
+  }
+  if (!path.points.coordinates.every(isFiniteCoordinatePair)) {
+    return null;
+  }
+
+  const graphEdgeIds = path.details?.edge_id?.map((detail) => String(detail[2])) ?? [];
+  if (requireEdgeIds && graphEdgeIds.length === 0) {
+    throw new Error("GraphHopper route did not include edge provenance.");
+  }
+
+  return {
+    geometry: path.points.coordinates.map(([lng, lat]) => ({ lat, lng })),
+    graphEdgeIds: graphEdgeIds.length ? graphEdgeIds : undefined,
+    distanceKm: path.distance / 1000,
+    durationMinutes: Math.max(1, Math.round(path.time / 60000))
+  };
 }
 
 export async function snapMeetupWithGraphHopper(point: LatLng, env: GraphHopperEnv) {
@@ -76,7 +121,12 @@ export async function snapMeetupWithGraphHopper(point: LatLng, env: GraphHopperE
     throw new Error(`GraphHopper nearest-edge lookup failed with ${response.status}.`);
   }
   const result = (await response.json()) as GraphHopperNearestResponse;
-  if (!result.coordinates || typeof result.distance !== "number" || result.distance > 75) {
+  if (
+    !isFiniteCoordinatePair(result.coordinates) ||
+    typeof result.distance !== "number" ||
+    !Number.isFinite(result.distance) ||
+    result.distance > 75
+  ) {
     return null;
   }
   return {
@@ -112,17 +162,7 @@ export async function fetchRouteWithGraphHopper(
       throw new Error(`GraphHopper hosted route failed with ${response.status}.`);
     }
     const payload = (await response.json()) as GraphHopperResponse;
-    const path = payload.paths?.[0];
-    if (!path?.points.coordinates?.length) {
-      return null;
-    }
-    const graphEdgeIds = path.details?.edge_id?.map((detail) => String(detail[2])) ?? [];
-    return {
-      geometry: path.points.coordinates.map(([lng, lat]) => ({ lat, lng })),
-      graphEdgeIds: graphEdgeIds.length ? graphEdgeIds : undefined,
-      distanceKm: path.distance / 1000,
-      durationMinutes: Math.max(1, Math.round(path.time / 60000))
-    };
+    return normalizeGraphHopperPath(payload.paths?.[0], { requireEdgeIds: false });
   }
 
   if (!env.GRAPHHOPPER_BASE_URL) {
@@ -152,18 +192,5 @@ export async function fetchRouteWithGraphHopper(
     throw new Error(`GraphHopper route failed with ${response.status}.`);
   }
   const payload = (await response.json()) as GraphHopperResponse;
-  const path = payload.paths?.[0];
-  if (!path?.points.coordinates?.length) {
-    return null;
-  }
-  const graphEdgeIds = path.details?.edge_id?.map((detail) => String(detail[2])) ?? [];
-  if (graphEdgeIds.length === 0) {
-    throw new Error("GraphHopper route did not include edge provenance.");
-  }
-  return {
-    geometry: path.points.coordinates.map(([lng, lat]) => ({ lat, lng })),
-    graphEdgeIds,
-    distanceKm: path.distance / 1000,
-    durationMinutes: Math.max(1, Math.round(path.time / 60000))
-  };
+  return normalizeGraphHopperPath(payload.paths?.[0], { requireEdgeIds: true });
 }

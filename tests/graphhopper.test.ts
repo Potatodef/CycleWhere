@@ -135,6 +135,68 @@ describe("GraphHopper route provenance", () => {
     ]);
   });
 
+  it("treats malformed hosted route geometry as an unroutable candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            paths: [
+              {
+                distance: 6200,
+                time: 1_500_000,
+                points: { coordinates: [[103.8, null]] }
+              }
+            ]
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHHOPPER_API_KEY: "test-key" }
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("treats malformed hosted route metrics as an unroutable candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            paths: [
+              {
+                distance: null,
+                time: 1_500_000,
+                points: { coordinates: [[103.8, 1.3], [103.85, 1.34]] }
+              }
+            ]
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHHOPPER_API_KEY: "test-key" }
+      )
+    ).resolves.toBeNull();
+  });
+
   it("treats hosted no-path responses as an unroutable candidate", async () => {
     vi.stubGlobal(
       "fetch",
@@ -168,6 +230,25 @@ describe("GraphHopper route provenance", () => {
       point: { lat: 1.3, lng: 103.8 },
       distanceMeters: 0
     });
+  });
+
+  it("rejects malformed self-hosted nearest snapping coordinates", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ coordinates: [103.8, null], distance: 12 }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+
+    await expect(
+      snapMeetupWithGraphHopper(
+        { lat: 1.3, lng: 103.8 },
+        { GRAPHHOPPER_BASE_URL: "https://routing.example" }
+      )
+    ).resolves.toBeNull();
   });
 
   it("rejects the legacy single-h secret name", async () => {

@@ -325,7 +325,12 @@ export function RouteMap({
 
   if (mapError) {
     return (
-      <div className="map-shell map-fallback" aria-label="Route preview unavailable">
+      <div
+        className="map-shell map-fallback"
+        role="status"
+        aria-live="polite"
+        aria-label="Route preview unavailable"
+      >
         <div className="map-fallback-copy">
           <strong>Map preview unavailable</strong>
           <span>{mapError}</span>
@@ -335,5 +340,5 @@ export function RouteMap({
     );
   }
 
-  return <div className="map-shell" ref={containerRef} aria-label="Route preview map" />;
+  return <div className="map-shell" ref={containerRef} role="region" aria-label="Route preview map" />;
 }

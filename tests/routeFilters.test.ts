@@ -75,4 +75,33 @@ describe("filterPlannedRoutes", () => {
     expect(filtered.zoneStatuses).toBe(plannedRoutes.zoneStatuses);
     expect(filtered.liveDiscoveryStatus).toBe("available");
   });
+
+  it("keeps surviving sections and recalculates their best route id", () => {
+    const multiSectionRoutes: PlannedRoutes = {
+      ...plannedRoutes,
+      sections: [
+        plannedRoutes.sections[0]!,
+        {
+          id: "more-route-options",
+          title: "More route options",
+          bestFairnessRouteId: "short-backup",
+          routes: [makeRoute("short-backup", 4, 8), makeRoute("long-backup", 16, 22)]
+        }
+      ]
+    };
+
+    const filtered = filterPlannedRoutes(multiSectionRoutes, {
+      minimumDistanceKm: 10,
+      maximumFairnessSpreadMinutes: 0
+    });
+
+    expect(filtered.sections.map((section) => section.id)).toEqual([
+      "best-fair-routes",
+      "more-route-options"
+    ]);
+    expect(filtered.sections[0]?.routes.map((route) => route.id)).toEqual(["long-fair"]);
+    expect(filtered.sections[0]?.bestFairnessRouteId).toBe("long-fair");
+    expect(filtered.sections[1]?.routes.map((route) => route.id)).toEqual(["long-backup"]);
+    expect(filtered.sections[1]?.bestFairnessRouteId).toBe("long-backup");
+  });
 });
