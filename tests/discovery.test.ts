@@ -270,6 +270,74 @@ describe("live discovery", () => {
     expect(result.routes[0]?.verifiedCoverage).toBe(0.68);
   });
 
+  it("does not spend the primary endpoint cap on points without a transport anchor", async () => {
+    mockState.candidatePoints = [
+      {
+        id: "unanchored-north",
+        point: { lat: 1.37, lng: 103.86 },
+        sourceKinds: ["cycling-path"],
+        nearbyFeatureIds: ["cycling-path-unanchored"]
+      },
+      {
+        id: "bedok",
+        point: { lat: 1.32403889, lng: 103.93003611 },
+        sourceKinds: ["cycling-path"],
+        nearbyFeatureIds: ["cycling-path-1"]
+      }
+    ];
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async ({ end }: { end: { lat: number; lng: number } }) => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: (1.2808 + end.lat) / 2, lng: (103.8545 + end.lng) / 2 },
+        end
+      ],
+      distanceKm: 8,
+      durationMinutes: 24
+    }));
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        maxDiversityBackfillEndpoints: 0,
+        maxFallbackEndpoints: 0,
+        routingProfiles: ["bicycle"],
+        fetchRoute
+      }
+    );
+
+    expect(fetchRoute).toHaveBeenCalledTimes(1);
+    expect(fetchRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        end: { lat: 1.32403889, lng: 103.93003611 }
+      })
+    );
+    expect(result.routes.map((route) => route.id)).toEqual(["bedok"]);
+    expect(result.liveDiscoveryStatus).toBe("available");
+  });
+
   it("backfills extra eligible endpoint buckets when primary discovery is too narrow", async () => {
     mockState.coverage.value = {
       verifiedCoverage: 0.82,

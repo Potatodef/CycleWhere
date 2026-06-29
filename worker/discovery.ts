@@ -142,6 +142,47 @@ function routeBucketKey(start: LatLng, point: LatLng) {
   return `${distanceBandIndex(haversineKm(start, point))}:${sectorIndex(start, point)}`;
 }
 
+function eligibleGenericJobs(jobs: GenericJob[]) {
+  return jobs.filter((job) => nearestEligibleAnchor(job.point).eligible);
+}
+
+function sortRoutesForDiscoveryPage(routes: RouteCandidate[], start: LatLng) {
+  const byQuality = [...routes].sort(
+    (left, right) =>
+      (right.routeQualityScore ?? 0) - (left.routeQualityScore ?? 0) ||
+      left.distanceKm - right.distanceKm ||
+      left.id.localeCompare(right.id)
+  );
+  const groups = new Map<string, RouteCandidate[]>();
+
+  for (const route of byQuality) {
+    const key = routeBucketKey(start, route.endpoint);
+    const group = groups.get(key);
+    if (group) {
+      group.push(route);
+    } else {
+      groups.set(key, [route]);
+    }
+  }
+
+  const ordered: RouteCandidate[] = [];
+  const bucketKeys = [...groups.keys()];
+  let appended = true;
+  while (appended) {
+    appended = false;
+    for (const key of bucketKeys) {
+      const next = groups.get(key)?.shift();
+      if (!next) {
+        continue;
+      }
+      appended = true;
+      ordered.push(next);
+    }
+  }
+
+  return ordered;
+}
+
 function buildGenericJobs(start: LatLng, riderAnchors: LatLng[]): GenericJob[] {
   const homeCentre = medianHomeCentre(riderAnchors);
   const groups = new Map<string, Array<{ point: LatLng; id: string; nearbyFeatureIds: string[]; distanceKm: number }>>();
@@ -358,7 +399,8 @@ export async function discoverCyclingRoutes(
   );
   // Named source lines are overlays, not physical topology. They may be re-enabled only
   // after import produces continuous, directed GraphHopper edge sequences.
-  const pageJobs = genericJobs.slice(0, deps.maxDiscoveryEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
+  const eligibleJobs = eligibleGenericJobs(genericJobs);
+  const pageJobs = eligibleJobs.slice(0, deps.maxDiscoveryEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
   const networkVersion = getVerifiedNetwork().version;
 
   if (pageJobs.length === 0) {
@@ -447,10 +489,7 @@ export async function discoverCyclingRoutes(
         : "available";
 
   return {
-    routes: routes.sort(
-      (left, right) =>
-        (right.routeQualityScore ?? 0) - (left.routeQualityScore ?? 0) || left.distanceKm - right.distanceKm
-    ),
+    routes: sortRoutesForDiscoveryPage(routes, request.start.point),
     diagnostics,
     zoneStatuses: [
       {

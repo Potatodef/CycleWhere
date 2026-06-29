@@ -382,6 +382,17 @@ function validSingaporePoint(point: { lat: number; lng: number } | undefined) {
   );
 }
 
+function uniqueRoutesById(routes: RouteSearchResult["routes"]) {
+  const seen = new Set<string>();
+  return routes.filter((route) => {
+    if (seen.has(route.id)) {
+      return false;
+    }
+    seen.add(route.id);
+    return true;
+  });
+}
+
 app.post("/api/route-searches", async (context) => {
   const parsed = await readJson<RouteSearchRequest>(context.req.raw);
   if (!parsed.ok) {
@@ -513,24 +524,26 @@ app.post("/api/route-searches", async (context) => {
           anchor: participant.anchor
         }) satisfies ResolvedParticipant
     );
+    const discoveredRoutes = uniqueRoutesById(result.routes);
     const estimatedOrder = planRoutes({
-      candidates: result.routes,
+      candidates: discoveredRoutes,
       participants: resolvedParticipants,
       startTimeIso: normalizedPayload.departureIso,
       zoneStatuses: result.zoneStatuses,
       liveDiscoveryStatus: result.liveDiscoveryStatus
     }).sections.flatMap((section) => section.routes);
     const acceptedIds = new Set(estimatedOrder.map((route) => route.id));
+    const routeById = new Map(discoveredRoutes.map((route) => [route.id, route]));
     const prioritizedRouteIds = estimatedOrder
       .map((route) => route.id)
-      .concat(result.routes.filter((candidate) => !acceptedIds.has(candidate.id)).map((candidate) => candidate.id));
+      .concat(discoveredRoutes.filter((candidate) => !acceptedIds.has(candidate.id)).map((candidate) => candidate.id));
     const materializedRoutes = prioritizedRouteIds.map((routeId, searchRank) => ({
-      ...result.routes.find((candidate) => candidate.id === routeId)!,
+      ...routeById.get(routeId)!,
       overlapSignature: [],
       searchRank
     }));
     const diagnostics = result.diagnostics.concat(
-      result.routes
+      discoveredRoutes
         .filter((candidate) => !acceptedIds.has(candidate.id))
         .map((candidate) => ({
           candidateId: candidate.id,
@@ -552,13 +565,11 @@ app.post("/api/route-searches", async (context) => {
       zoneStatuses: result.zoneStatuses,
       liveDiscoveryStatus: result.liveDiscoveryStatus
     };
-    try {
-      await storeRouteSearch(context.env.TRANSIT_CACHE, search);
-    } catch (error) {
-      console.error("Route search session write failed", error);
-    }
     noStore(context);
-    return context.json<RouteSearchResult>(await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET));
+    await storeRouteSearch(context.env.TRANSIT_CACHE, search);
+    return context.json<RouteSearchResult>(
+      await materializePage(search, 0, context.env.PAGE_TOKEN_SECRET)
+    );
   } catch (error) {
     console.error("Route search failed", {
       requestId: routeSearchRequestId,
@@ -579,22 +590,32 @@ app.get("/api/route-searches/page", async (context) => {
       503
     );
   }
-  const token = context.req.query("token");
-  const parsed = token ? await readPageToken(token, context.env.PAGE_TOKEN_SECRET) : null;
-  if (!parsed || new Date(parsed.expiresAt).getTime() <= Date.now()) {
+  try {
+    const token = context.req.query("token");
+    const parsed = token ? await readPageToken(token, context.env.PAGE_TOKEN_SECRET) : null;
+    if (!parsed || new Date(parsed.expiresAt).getTime() <= Date.now()) {
+      return context.json<RouteSearchError>(
+        { error: "Route search expired.", code: "search_expired" },
+        410
+      );
+    }
+    const search = await loadRouteSearch(context.env.TRANSIT_CACHE, parsed.sessionId);
+    if (!search || search.graphVersion !== parsed.graphVersion || new Date(search.expiresAt).getTime() <= Date.now()) {
+      return context.json<RouteSearchError>(
+        { error: "Route search expired.", code: "search_expired" },
+        410
+      );
+    }
+    return context.json(await materializePage(search, parsed.startIndex, context.env.PAGE_TOKEN_SECRET));
+  } catch (error) {
+    console.error("Route search page load failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
     return context.json<RouteSearchError>(
-      { error: "Route search expired.", code: "search_expired" },
-      410
+      { error: "Route search page could not be loaded.", code: "routing_unavailable" },
+      503
     );
   }
-  const search = await loadRouteSearch(context.env.TRANSIT_CACHE, parsed.sessionId);
-  if (!search || search.graphVersion !== parsed.graphVersion || new Date(search.expiresAt).getTime() <= Date.now()) {
-    return context.json<RouteSearchError>(
-      { error: "Route search expired.", code: "search_expired" },
-      410
-    );
-  }
-  return context.json(await materializePage(search, parsed.startIndex, context.env.PAGE_TOKEN_SECRET));
 });
 
 export default app;

@@ -64,4 +64,15 @@ describe("filterPlannedRoutes", () => {
     expect(filtered.sections[0]?.routes.map((route) => route.id)).toEqual(["long-fair"]);
     expect(filtered.sections[0]?.bestFairnessRouteId).toBe("long-fair");
   });
+
+  it("clears route sections when filters remove every route", () => {
+    const filtered = filterPlannedRoutes(plannedRoutes, {
+      minimumDistanceKm: 20,
+      maximumFairnessSpreadMinutes: 10
+    });
+
+    expect(filtered.sections).toEqual([]);
+    expect(filtered.zoneStatuses).toBe(plannedRoutes.zoneStatuses);
+    expect(filtered.liveDiscoveryStatus).toBe("available");
+  });
 });

@@ -116,18 +116,34 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
 }
 
 export async function createRouteSearch(request: RouteSearchRequest) {
-  const response = await fetch(`${apiBase}/api/route-searches`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request)
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase}/api/route-searches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request)
+    });
+  } catch {
+    throw routeSearchError(
+      "The routing service could not be reached. Check your connection and try again.",
+      "routing_network_error"
+    );
+  }
   return routeSearchResponse<RouteSearchResult>(response);
 }
 
 export async function loadRouteSearchPage(pageToken: string) {
-  const response = await fetch(
-    `${apiBase}/api/route-searches/page?token=${encodeURIComponent(pageToken)}`
-  );
+  let response: Response;
+  try {
+    response = await fetch(
+      `${apiBase}/api/route-searches/page?token=${encodeURIComponent(pageToken)}`
+    );
+  } catch {
+    throw routeSearchError(
+      "The routing service could not be reached. Check your connection and try again.",
+      "routing_network_error"
+    );
+  }
   return routeSearchResponse<RouteSearchPageResult>(response);
 }
 

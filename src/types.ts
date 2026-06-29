@@ -207,6 +207,7 @@ export type RouteSearchPageResult = Omit<RouteSearchResult, "searchId" | "expire
 
 export type RouteSearchErrorCode =
   | "invalid_meetup"
+  | "routing_network_error"
   | "routing_unavailable"
   | "search_expired";
 

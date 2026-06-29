@@ -96,6 +96,21 @@ function buildEndMarker() {
   return element;
 }
 
+function hardenBlankTargetLinks(container: HTMLElement) {
+  container
+    .querySelectorAll<HTMLAnchorElement>('a[target="_blank"]')
+    .forEach((link) => {
+      const relValues = new Set(link.rel.split(/\s+/).filter(Boolean));
+      relValues.add("noopener");
+      relValues.add("noreferrer");
+      link.rel = Array.from(relValues).join(" ");
+    });
+}
+
+function isMappablePoint(point: { lat: number; lng: number }) {
+  return Number.isFinite(point.lat) && Number.isFinite(point.lng);
+}
+
 export function RouteMap({
   start,
   participants,
@@ -134,6 +149,9 @@ export function RouteMap({
     });
 
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
+    map.on("styledata", () => hardenBlankTargetLinks(map.getContainer()));
+    map.on("idle", () => hardenBlankTargetLinks(map.getContainer()));
+    hardenBlankTargetLinks(map.getContainer());
     mapRef.current = map;
 
     return () => {
@@ -149,6 +167,7 @@ export function RouteMap({
     }
 
     map.setStyle(getMapStyle(mapStyle));
+    hardenBlankTargetLinks(map.getContainer());
   }, [mapError, mapStyle]);
 
   useEffect(() => {
@@ -204,7 +223,7 @@ export function RouteMap({
         map.removeSource(routeSourceId);
       }
 
-      if (start) {
+      if (start && isMappablePoint(start.point)) {
         const marker = new maplibregl.Marker({ element: buildStartMarker() })
           .setLngLat([start.point.lng, start.point.lat])
           .addTo(map);
@@ -213,6 +232,10 @@ export function RouteMap({
       }
 
       participants.forEach((participant) => {
+        if (!isMappablePoint(participant.stationResolution.point)) {
+          return;
+        }
+
         const marker = new maplibregl.Marker({
           element: buildMarker(
             "map-pin map-pin-person",
@@ -225,45 +248,49 @@ export function RouteMap({
         points.push(participant.stationResolution.point);
       });
 
-      if (selectedRoute) {
+      if (selectedRoute && isMappablePoint(selectedRoute.endpoint)) {
         const endpointMarker = new maplibregl.Marker({ element: buildEndMarker() })
           .setLngLat([selectedRoute.endpoint.lng, selectedRoute.endpoint.lat])
           .addTo(map);
         markersRef.current.push(endpointMarker);
+        points.push(selectedRoute.endpoint);
 
-        const routeGeojson = {
-          type: "FeatureCollection" as const,
-          features: [
-            {
-              type: "Feature" as const,
-              geometry: {
-                type: "LineString" as const,
-                coordinates: selectedRoute.geometry.map((point) => [point.lng, point.lat])
-              },
-              properties: {}
+        const routeGeometry = selectedRoute.geometry.filter(isMappablePoint);
+        if (routeGeometry.length >= 2) {
+          const routeGeojson = {
+            type: "FeatureCollection" as const,
+            features: [
+              {
+                type: "Feature" as const,
+                geometry: {
+                  type: "LineString" as const,
+                  coordinates: routeGeometry.map((point) => [point.lng, point.lat])
+                },
+                properties: {}
+              }
+            ]
+          };
+
+          map.addSource(routeSourceId, {
+            type: "geojson",
+            data: routeGeojson
+          });
+          map.addLayer({
+            id: routeLayerId,
+            type: "line",
+            source: routeSourceId,
+            layout: {
+              "line-cap": "round",
+              "line-join": "round"
+            },
+            paint: {
+              "line-color": "#204d38",
+              "line-width": 5,
+              "line-opacity": 0.9
             }
-          ]
-        };
-
-        map.addSource(routeSourceId, {
-          type: "geojson",
-          data: routeGeojson
-        });
-        map.addLayer({
-          id: routeLayerId,
-          type: "line",
-          source: routeSourceId,
-          layout: {
-            "line-cap": "round",
-            "line-join": "round"
-          },
-          paint: {
-            "line-color": "#204d38",
-            "line-width": 5,
-            "line-opacity": 0.9
-          }
-        });
-        points.push(...selectedRoute.geometry);
+          });
+          points.push(...routeGeometry);
+        }
       }
 
       if (points.length > 0) {

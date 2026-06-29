@@ -559,9 +559,10 @@ export function App() {
     if (!selectedRouteId) {
       return allRoutes[0] ?? null;
     }
-    return allRoutes.find((route) => route.id === selectedRouteId) ?? null;
+    return allRoutes.find((route) => route.id === selectedRouteId) ?? allRoutes[0] ?? null;
   }, [allRoutes, selectedRouteId]);
 
+  const effectiveSelectedRouteId = selectedRoute?.id ?? null;
   const hasPreviewMapData = Boolean(resolvedStart || previewParticipants.length > 0 || selectedRoute);
   const allRouteCount = allRoutes.length;
   const googleMapsRouteUrl =
@@ -997,6 +998,8 @@ export function App() {
       setMessage(
         (error as { code?: string })?.code === "invalid_meetup"
           ? "That meetup point cannot safely connect to the cycling network. Pick another nearby location."
+          : (error as { code?: string })?.code === "routing_network_error"
+            ? "The routing service could not be reached. Check your connection and try again."
           : (error as { code?: string })?.code === "routing_unavailable"
             ? "The cycling graph is unavailable right now. Try again shortly."
             : "Route planning hit an unexpected error. Try the same inputs again."
@@ -1039,6 +1042,8 @@ export function App() {
       setMessage(
         (error as { code?: string })?.code === "search_expired"
           ? "This route search expired. Plan again to refresh the results."
+          : (error as { code?: string })?.code === "routing_network_error"
+            ? "The routing service could not be reached. Check your connection and try again."
           : "Loading more routes failed. Try again."
       );
     }
@@ -1106,6 +1111,18 @@ export function App() {
     setMaximumFairnessSpreadMinutes(0);
   }
 
+  function selectStationSuggestion(participant: ParticipantInput, index: number, stationName: string) {
+    dismissedStationFieldIdRef.current = participant.id;
+    updateParticipant(participant.id, "station", stationName);
+    setActiveStationFieldId(null);
+    setMessage(`${participant.name || `Rider ${index + 1}`} pinned to ${stationName}.`);
+    window.setTimeout(() => {
+      if (dismissedStationFieldIdRef.current === participant.id) {
+        dismissedStationFieldIdRef.current = null;
+      }
+    }, 0);
+  }
+
   return (
     <>
       <nav className="top-nav">
@@ -1132,7 +1149,9 @@ export function App() {
           </svg>
           <span>CycleWhere</span>
         </div>
-        <div className="top-nav-status">{message}</div>
+        <div className="top-nav-status" role="status" aria-live="polite" aria-atomic="true">
+          {message}
+        </div>
       </nav>
 
       <div className="app-shell">
@@ -1382,12 +1401,17 @@ export function App() {
                                         ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
                                         ?.focus();
                                     }
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      selectStationSuggestion(participant, index, stationName);
+                                      event.currentTarget
+                                        .closest(".field-with-suggestions")
+                                        ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
+                                        ?.focus();
+                                    }
                                   }}
-                                  onClick={() => {
-                                    updateParticipant(participant.id, "station", stationName);
-                                    setActiveStationFieldId(null);
-                                    setMessage(`${participant.name || `Rider ${index + 1}`} pinned to ${stationName}.`);
-                                  }}
+                                  onClick={() => selectStationSuggestion(participant, index, stationName)}
                                 >
                                   <span>{stationName}</span>
                                 </button>
@@ -1483,7 +1507,7 @@ export function App() {
                   : "Using local fallback estimates until live route services are connected."}
               </span>
               {googleMapsRouteUrl ? (
-                <a href={googleMapsRouteUrl} target="_blank" rel="noreferrer" className="map-link">
+                <a href={googleMapsRouteUrl} target="_blank" rel="noopener noreferrer" className="map-link">
                   Open selected route in Google Maps
                 </a>
               ) : null}
@@ -1508,8 +1532,11 @@ export function App() {
                   >
                     Filter routes
                   </button>
-                  <div className="results-toolbar-copy">
-                    <strong>{allRouteCount} shown</strong>
+                  <div
+                    className="results-toolbar-copy"
+                    aria-label={`${allRouteCount} shown. ${hasActiveRouteFilters ? routeFilterSummary : "Showing every route option."}`}
+                  >
+                    <strong>{allRouteCount} shown.</strong>{" "}
                     <span>{hasActiveRouteFilters ? routeFilterSummary : "Showing every route option."}</span>
                   </div>
                 </div>
@@ -1539,7 +1566,7 @@ export function App() {
                         route={route}
                         startLabel={resolvedStart?.label}
                         bestFairnessRouteId={section.bestFairnessRouteId}
-                        selectedRouteId={selectedRouteId}
+                        selectedRouteId={effectiveSelectedRouteId}
                         expanded={expandedRouteIds.includes(route.id)}
                         onSelect={handleSelectRoute}
                         onToggleDetails={toggleRouteDetails}

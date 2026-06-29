@@ -1,6 +1,19 @@
 import networkManifest from "../public/data/network-manifest.json";
 import verifiedNetwork from "../public/data/verified-network.json";
-import { listVerifiedBusAnchors } from "../src/lib/verifiedNetwork.js";
+import {
+  listVerifiedBusAnchors,
+  MAX_COVERAGE_SAMPLES,
+  measureRouteCoverage,
+  sampleRouteCoveragePoints
+} from "../src/lib/verifiedNetwork.js";
+import type { LatLng } from "../src/types.js";
+
+function longGeometry(pointCount: number): LatLng[] {
+  return Array.from({ length: pointCount }, (_, index) => ({
+    lat: 1.28 + index * 0.00008,
+    lng: 103.85 + index * 0.00008
+  }));
+}
 
 describe("verified network asset", () => {
   it("contains only official datasets and named official routes", () => {
@@ -30,5 +43,22 @@ describe("verified network asset", () => {
     const busAnchors = listVerifiedBusAnchors();
     expect(new Set(busAnchors.map((anchor) => anchor.id)).size).toBe(busAnchors.length);
     expect(busAnchors.length).toBeLessThanOrEqual(verifiedNetwork.busAnchors.length);
+  });
+
+  it("caps coverage samples for long route geometries", () => {
+    const sampled = sampleRouteCoveragePoints(longGeometry(1501));
+
+    expect(sampled.points.length).toBeLessThanOrEqual(MAX_COVERAGE_SAMPLES);
+    expect(sampled.distanceKm).toBeGreaterThan(0);
+  });
+
+  it("measures long route coverage without unbounded sampling", () => {
+    const coverage = measureRouteCoverage(longGeometry(1501));
+
+    expect(coverage.verifiedCoverage).toBeGreaterThanOrEqual(0);
+    expect(coverage.verifiedCoverage).toBeLessThanOrEqual(1);
+    expect(coverage.mixedTrafficMeters).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(coverage.sourceDatasets)).toBe(true);
+    expect(Array.isArray(coverage.sourceFeatureIds)).toBe(true);
   });
 });
