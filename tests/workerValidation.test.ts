@@ -15,6 +15,32 @@ describe("worker request validation", () => {
     });
   });
 
+  it("accepts a singular geocode query for manual API callers", async () => {
+    const response = await app.request("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "Jurong East MRT" })
+    });
+    const payload = await response.json() as { results: Array<{ query: string; label: string }> };
+
+    expect(response.status).toBe(200);
+    expect(payload.results).toHaveLength(1);
+    expect(payload.results[0]?.query).toBe("Jurong East MRT");
+  });
+
+  it("returns 400 for malformed singular geocode queries", async () => {
+    const response = await app.request("/api/geocode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: 123 })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Geocode query must be a string."
+    });
+  });
+
   it("returns 400 for malformed transit queries", async () => {
     const response = await app.request("/api/transit-times", {
       method: "POST",

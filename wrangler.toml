@@ -1,6 +1,7 @@
 name = "cyclewhere-api"
 main = "worker/index.ts"
 compatibility_date = "2026-05-03"
+pages_build_output_dir = "dist"
 
 [[d1_databases]]
 binding = "TRANSIT_CACHE"

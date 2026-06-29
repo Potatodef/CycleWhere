@@ -292,17 +292,25 @@ app.get("/api/readiness", async (context) => {
 app.get("/api/network-manifest", (context) => context.json(networkManifest));
 
 app.post("/api/geocode", async (context) => {
-  const parsed = await readJson<{ queries?: unknown }>(context.req.raw);
+  const parsed = await readJson<{ query?: unknown; queries?: unknown }>(context.req.raw);
   if (!parsed.ok) {
     return context.json({ error: parsed.error }, 400);
   }
   if (parsed.payload.queries !== undefined && !Array.isArray(parsed.payload.queries)) {
     return context.json({ error: "Geocode queries must be an array." }, 400);
   }
+  if (parsed.payload.query !== undefined && typeof parsed.payload.query !== "string") {
+    return context.json({ error: "Geocode query must be a string." }, 400);
+  }
   if (Array.isArray(parsed.payload.queries) && !parsed.payload.queries.every((query) => typeof query === "string")) {
     return context.json({ error: "Geocode queries must be strings." }, 400);
   }
-  const queries = ((parsed.payload.queries ?? []) as string[])
+  const rawQueries = Array.isArray(parsed.payload.queries)
+    ? parsed.payload.queries
+    : parsed.payload.query !== undefined
+      ? [parsed.payload.query]
+      : [];
+  const queries = rawQueries
     .map((query) => query.trim())
     .filter(Boolean);
 
@@ -313,13 +321,18 @@ app.post("/api/geocode", async (context) => {
     return context.json({ error: "Too many geocode queries." }, 400);
   }
 
-  try {
-    return context.json(await geocodeManyWithOneMap(queries, context.env));
-  } catch {
-    return context.json<GeocodeResponse>({
-      results: queries.map((query) => fallbackResolve(query))
-    });
+  const hasOneMapCredentials = Boolean(context.env?.ONEMAP_API_EMAIL && context.env?.ONEMAP_API_PASSWORD);
+  if (hasOneMapCredentials) {
+    try {
+      return context.json(await geocodeManyWithOneMap(queries, context.env));
+    } catch (error) {
+      console.error("OneMap geocode failed; using fallback geocoder", error);
+    }
   }
+
+  return context.json<GeocodeResponse>({
+    results: queries.map((query) => fallbackResolve(query))
+  });
 });
 
 app.post("/api/transit-times", async (context) => {
