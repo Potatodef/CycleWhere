@@ -1,7 +1,7 @@
 import { railStationSeeds } from "../src/lib/anchors.js";
 import { haversineKm } from "../src/lib/geo.js";
 import { homewardScore, medianHomeCentre } from "../src/lib/homeward.js";
-import { routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
+import { overlapRatio, routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
 import {
   getVerifiedNetwork,
   listVerifiedCandidatePoints,
@@ -61,14 +61,6 @@ const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 const RAIL_ANCHOR_RADIUS_KM = 1;
 const KM_TO_DEGREES = 1 / 110.574;
-
-function overlapRatio(a: string[], b: string[]) {
-  const aSet = new Set(a);
-  const bSet = new Set(b);
-  const intersection = [...aSet].filter((value) => bSet.has(value)).length;
-  const union = new Set([...aSet, ...bSet]).size || 1;
-  return intersection / union;
-}
 
 function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
   const overlap = overlapRatio(a.overlapSignature, b.overlapSignature);

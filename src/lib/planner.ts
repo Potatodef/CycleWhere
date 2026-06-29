@@ -6,7 +6,7 @@ import {
   standardDeviation
 } from "./fairness.js";
 import { haversineKm } from "./geo.js";
-import { routeQualityScore, routeSignature } from "./routeUtils.js";
+import { overlapRatio, routeQualityScore, routeSignature } from "./routeUtils.js";
 import { estimateTransitMinutesBetween } from "./transit.js";
 import type {
   LiveDiscoveryStatus,
@@ -40,14 +40,6 @@ type TransitQueryBundle = Array<{
 
 export const TRANSIT_HANDOFF_MINUTES = 10;
 const TRANSIT_ACCESS_WALKING_KMH = 5;
-
-function overlapRatio(a: string[], b: string[]) {
-  const aSet = new Set(a);
-  const bSet = new Set(b);
-  const intersection = [...aSet].filter((value) => bSet.has(value)).length;
-  const union = new Set([...aSet, ...bSet]).size || 1;
-  return intersection / union;
-}
 
 function routeTransitKey({
   candidate,

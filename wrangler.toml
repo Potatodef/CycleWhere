@@ -8,7 +8,7 @@ database_name = "cyclewhere-transit-cache"
 database_id = "40d3dd74-5c27-4839-8e21-c7f597946098"
 
 [vars]
-CORS_ORIGIN = "http://127.0.0.1:5173,http://127.0.0.1:5174"
+CORS_ORIGIN = "http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:5173,http://localhost:5174"
 GRAPHHOPPER_PROFILE_OFFICIAL = "cyclewhere_official"
 GRAPHHOPPER_PROFILE_QUIET = "cyclewhere_quiet"
 GRAPHHOPPER_PROFILE_BICYCLE = "cyclewhere_bicycle"

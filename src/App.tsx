@@ -175,7 +175,8 @@ function formatDepartureSummary(value: string) {
 function zoneStatusCopy(zone: ZoneDiscoveryStatus) {
   const base = `${zone.zoneName}: ${zone.status}`;
   const candidateCopy = `${zone.candidateCount} candidate${zone.candidateCount === 1 ? "" : "s"}`;
-  return zone.reason ? `${base}. ${candidateCopy}. ${zone.reason}.` : `${base}. ${candidateCopy}.`;
+  const reason = zone.reason?.replace(/\.+$/, "");
+  return reason ? `${base}. ${candidateCopy}. ${reason}.` : `${base}. ${candidateCopy}.`;
 }
 
 function buildGoogleMapsRouteUrl(
@@ -329,7 +330,7 @@ function RouteCard({
           <p>{routeDirectionLabel(route, startLabel)}</p>
           <div className="chip-row">
             {bestFairnessRouteId === route.id ? <span className="chip">Best overall in section</span> : null}
-            <span className="chip">{route.fairnessSource === "exact" ? "Exact fairness" : "Estimated fairness"}</span>
+            <span className="chip">{route.fairnessSource === "exact" ? "Fairness updated" : "Estimated fairness"}</span>
             {route.origin === "named-route" ? <span className="chip">Named official route</span> : null}
             {route.officialRouteSurface === "mixed" ? <span className="chip">Mixed surface</span> : null}
           </div>
@@ -1305,6 +1306,7 @@ export function App() {
                 const colors = participantStyles[participant.id];
                 const stationSuggestionListId = `station-suggestions-${participant.id}`;
                 const isStationSuggestionOpen = activeStationFieldId === participant.id;
+                const stationSuggestions = getStationRecommendations(participant.station);
 
                 return (
                   <div
@@ -1369,7 +1371,7 @@ export function App() {
                             aria-autocomplete="list"
                             aria-expanded={isStationSuggestionOpen}
                             aria-haspopup="listbox"
-                            aria-controls={isStationSuggestionOpen ? stationSuggestionListId : undefined}
+                            aria-controls={stationSuggestionListId}
                             className={invalidStationIds.includes(participant.id) ? "invalid-input" : undefined}
                             aria-invalid={invalidStationIds.includes(participant.id)}
                             aria-describedby={invalidStationIds.includes(participant.id) ? `station-error-${participant.id}` : undefined}
@@ -1405,56 +1407,55 @@ export function App() {
                           {invalidStationIds.includes(participant.id) ? (
                             <span id={`station-error-${participant.id}`} className="field-error">Pick one MRT/LRT station from the suggested list.</span>
                           ) : null}
-                          {isStationSuggestionOpen ? (
-                            <div
-                              id={stationSuggestionListId}
-                              className="station-suggestions"
-                              role="listbox"
-                              aria-label={`Suggested stations for rider ${index + 1}`}
-                            >
-                              {getStationRecommendations(participant.station).map((stationName) => (
-                                <button
-                                  key={stationName}
-                                  type="button"
-                                  role="option"
-                                  aria-selected={stationName === findExactStation(participant.station)?.name}
-                                  className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
-                                  onMouseDown={(event) => event.preventDefault()}
-                                  onKeyDown={(event) => {
-                                    if (event.key === "ArrowDown") {
-                                      event.preventDefault();
-                                      focusStationSuggestion(event.currentTarget, 1);
-                                    }
-                                    if (event.key === "ArrowUp") {
-                                      event.preventDefault();
-                                      focusStationSuggestion(event.currentTarget, -1);
-                                    }
-                                    if (event.key === "Escape") {
-                                      event.preventDefault();
-                                      dismissedStationFieldIdRef.current = participant.id;
-                                      setActiveStationFieldId(null);
-                                      event.currentTarget
-                                        .closest(".field-with-suggestions")
-                                        ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
-                                        ?.focus();
-                                    }
-                                    if (event.key === "Enter") {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      selectStationSuggestion(participant, index, stationName);
-                                      event.currentTarget
-                                        .closest(".field-with-suggestions")
-                                        ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
-                                        ?.focus();
-                                    }
-                                  }}
-                                  onClick={() => selectStationSuggestion(participant, index, stationName)}
-                                >
-                                  <span>{stationName}</span>
-                                </button>
-                              ))}
-                            </div>
-                          ) : null}
+                          <div
+                            id={stationSuggestionListId}
+                            className="station-suggestions"
+                            role="listbox"
+                            aria-label={`Suggested stations for rider ${index + 1}`}
+                            hidden={!isStationSuggestionOpen}
+                          >
+                            {stationSuggestions.map((stationName) => (
+                              <button
+                                key={stationName}
+                                type="button"
+                                role="option"
+                                aria-selected={stationName === findExactStation(participant.station)?.name}
+                                className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
+                                onMouseDown={(event) => event.preventDefault()}
+                                onKeyDown={(event) => {
+                                  if (event.key === "ArrowDown") {
+                                    event.preventDefault();
+                                    focusStationSuggestion(event.currentTarget, 1);
+                                  }
+                                  if (event.key === "ArrowUp") {
+                                    event.preventDefault();
+                                    focusStationSuggestion(event.currentTarget, -1);
+                                  }
+                                  if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    dismissedStationFieldIdRef.current = participant.id;
+                                    setActiveStationFieldId(null);
+                                    event.currentTarget
+                                      .closest(".field-with-suggestions")
+                                      ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
+                                      ?.focus();
+                                  }
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    selectStationSuggestion(participant, index, stationName);
+                                    event.currentTarget
+                                      .closest(".field-with-suggestions")
+                                      ?.querySelector<HTMLInputElement>("input[type='text'], input:not([type])")
+                                      ?.focus();
+                                  }
+                                }}
+                                onClick={() => selectStationSuggestion(participant, index, stationName)}
+                              >
+                                <span>{stationName}</span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
                       </label>
                     </div>
@@ -1611,7 +1612,7 @@ export function App() {
                           {section.id === "best-fair-routes"
                             ? "These have the strongest fairness after route quality is applied. Estimated cards refine as exact checks finish."
                             : section.id === "more-route-options"
-                              ? "Useful backups when you want a different distance or finish. Estimated fairness stays here until exact checks run."
+                              ? "Alternative distances and directions. Cards marked Estimated will move if exact checks change their fairness score."
                               : "These exceed the usual fairness target, but remain visible so difficult groups still have honest options."}
                         </p>
                       </div>

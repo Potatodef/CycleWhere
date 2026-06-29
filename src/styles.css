@@ -276,7 +276,7 @@ a {
 .coverage-details summary {
   cursor: pointer;
   font-weight: 800;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .coverage-details ul {

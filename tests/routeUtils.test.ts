@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_ROUTE_SIGNATURE_SEGMENTS, routeSignature } from "../src/lib/routeUtils.js";
+import { MAX_ROUTE_SIGNATURE_SEGMENTS, overlapRatio, routeSignature } from "../src/lib/routeUtils.js";
 import type { LatLng } from "../src/types.js";
 
 function longGeometry(pointCount: number): LatLng[] {
@@ -41,5 +41,10 @@ describe("route utilities", () => {
     expect(signature[0]).toBe("1.0000,103.0000->1.0010,103.0010");
     expect(signature.at(-1)).toBe("2.4990,104.4990->2.5000,104.5000");
     expect(routeSignature(longGeometry(1501))).toEqual(signature);
+  });
+
+  it("measures signature overlap with a shared utility", () => {
+    expect(overlapRatio(["a", "b", "c"], ["b", "c", "d"])).toBeCloseTo(0.5);
+    expect(overlapRatio([], [])).toBe(0);
   });
 });

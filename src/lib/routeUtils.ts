@@ -55,3 +55,11 @@ export function routeQualityScore(candidate: RouteCandidate) {
   const mixedTrafficPenalty = (candidate.mixedTrafficMeters ?? 0) / 80;
   return Math.round(verifiedCoverage * 70 + protectedCoverage * 20 - mixedTrafficPenalty);
 }
+
+export function overlapRatio(a: string[], b: string[]) {
+  const aSet = new Set(a);
+  const bSet = new Set(b);
+  const intersection = [...aSet].filter((value) => bSet.has(value)).length;
+  const union = new Set([...aSet, ...bSet]).size || 1;
+  return intersection / union;
+}
