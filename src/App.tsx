@@ -172,6 +172,12 @@ function formatDepartureSummary(value: string) {
   }).format(parsed);
 }
 
+function zoneStatusCopy(zone: ZoneDiscoveryStatus) {
+  const base = `${zone.zoneName}: ${zone.status}`;
+  const candidateCopy = `${zone.candidateCount} candidate${zone.candidateCount === 1 ? "" : "s"}`;
+  return zone.reason ? `${base}. ${candidateCopy}. ${zone.reason}.` : `${base}. ${candidateCopy}.`;
+}
+
 function buildGoogleMapsRouteUrl(
   start: { lat: number; lng: number },
   route: RoutePlan
@@ -188,7 +194,7 @@ function buildGoogleMapsRouteUrl(
 }
 
 function exactCandidateLimit(participantCount: number) {
-  return Math.max(1, Math.min(8, Math.floor(40 / Math.max(participantCount, 1))));
+  return Math.max(6, Math.min(8, Math.floor(48 / Math.max(participantCount, 1))));
 }
 
 function geolocationErrorMessage(error?: GeolocationPositionError) {
@@ -442,6 +448,7 @@ export function App() {
     reject: (reason?: unknown) => void;
   } | null>(null);
   const workerRequestIdRef = useRef(0);
+  const planningInFlightRef = useRef(false);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const filterDialogRef = useRef<HTMLDialogElement>(null);
   const startInputRef = useRef<HTMLInputElement>(null);
@@ -634,6 +641,9 @@ export function App() {
         return;
       }
       suggestions.classList.remove("station-suggestions-above");
+      if (window.matchMedia("(max-width: 720px)").matches) {
+        return;
+      }
       const rect = suggestions.getBoundingClientRect();
       if (rect.bottom > window.innerHeight - 12 && rect.top > rect.height + 12) {
         suggestions.classList.add("station-suggestions-above");
@@ -754,6 +764,7 @@ export function App() {
 
   async function runPlanner(request: WorkerRequest) {
     return new Promise<PlannedRoutes>((resolve, reject) => {
+      workerPromiseRef.current?.reject(new Error("Route planning was superseded by a newer request."));
       workerPromiseRef.current = { requestId: request.requestId, resolve, reject };
       worker.postMessage(request satisfies WorkerRequest);
     });
@@ -881,58 +892,68 @@ export function App() {
   }
 
   async function handlePlan() {
-    const trimmedStartQuery = startQuery.trim();
-    const [startResolution] = trimmedStartQuery && !resolvedStart
-      ? await geocodeQueries([trimmedStartQuery])
-      : [null];
-    const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
-    const startDate = new Date(startMoment);
-    const unresolvedStations = participants
-      .filter((participant) => !findExactStation(participant.station))
-      .map((participant) => participant.id);
-    const hasInvalidMeetup = !resolvedStart && (!trimmedStartQuery || !hasReliableMeetupResolution(startResolution));
-    const hasPastDepartureTime =
-      hasCustomDepartureTime &&
-      (Number.isNaN(startDate.getTime()) || startDate.getTime() < roundToFiveMinutes().getTime());
-
-    setInvalidStartQuery(hasInvalidMeetup);
-    setStartFieldMessage(
-      hasInvalidMeetup
-        ? "Use a real meetup point that resolves to an actual place in Singapore."
-        : startResolution?.source === "fallback"
-          ? "Meetup resolved from fallback place data. Check the pinned start before riding."
-          : null
-    );
-    setInvalidStationIds(unresolvedStations);
-
-    if (hasInvalidMeetup || unresolvedStations.length > 0 || hasPastDepartureTime) {
-      setActiveStationFieldId(unresolvedStations[0] ?? null);
-      window.requestAnimationFrame(() => {
-        if (hasInvalidMeetup) {
-          startInputRef.current?.focus();
-          return;
-        }
-        const firstInvalidStation = unresolvedStations[0];
-        if (firstInvalidStation) {
-          stationInputRefs.current[firstInvalidStation]?.focus();
-        }
-      });
-      setMessage(
-        hasPastDepartureTime
-          ? "Pick a departure time that is now or later before planning."
-          : hasInvalidMeetup && unresolvedStations.length > 0
-          ? "Fix the meetup point and every rider's MRT/LRT station before planning."
-          : hasInvalidMeetup
-            ? "Fix the meetup point before planning any routes."
-            : "Pick a valid MRT/LRT station for every rider before planning any routes."
-      );
+    if (planningInFlightRef.current || status !== "idle") {
       return;
     }
 
+    planningInFlightRef.current = true;
     setStatus("planning");
-    setMessage("Checking verified Singapore cycling routes, then ranking them by fairness and route quality.");
+    setMessage("Validating meetup point and rider stations.");
 
     try {
+      const trimmedStartQuery = startQuery.trim();
+      const [startResolution] = trimmedStartQuery && !resolvedStart
+        ? await geocodeQueries([trimmedStartQuery])
+        : [null];
+      const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
+      const startDate = new Date(startMoment);
+      const unresolvedStations = participants
+        .filter((participant) => !findExactStation(participant.station))
+        .map((participant) => participant.id);
+      const hasInvalidMeetup =
+        !resolvedStart && (!trimmedStartQuery || !hasReliableMeetupResolution(startResolution));
+      const earliestAllowedDeparture = roundToFiveMinutes();
+      earliestAllowedDeparture.setMinutes(earliestAllowedDeparture.getMinutes() - 5);
+      const hasPastDepartureTime =
+        hasCustomDepartureTime &&
+        (Number.isNaN(startDate.getTime()) || startDate.getTime() < earliestAllowedDeparture.getTime());
+
+      setInvalidStartQuery(hasInvalidMeetup);
+      setStartFieldMessage(
+        hasInvalidMeetup
+          ? "Use a real meetup point that resolves to an actual place in Singapore."
+          : startResolution?.source === "fallback"
+            ? "Meetup resolved from fallback place data. Check the pinned start before riding."
+            : null
+      );
+      setInvalidStationIds(unresolvedStations);
+
+      if (hasInvalidMeetup || unresolvedStations.length > 0 || hasPastDepartureTime) {
+        setActiveStationFieldId(unresolvedStations[0] ?? null);
+        window.requestAnimationFrame(() => {
+          if (hasInvalidMeetup) {
+            startInputRef.current?.focus();
+            return;
+          }
+          const firstInvalidStation = unresolvedStations[0];
+          if (firstInvalidStation) {
+            stationInputRefs.current[firstInvalidStation]?.focus();
+          }
+        });
+        setStatus("idle");
+        setMessage(
+          hasPastDepartureTime
+            ? "Pick a departure time that is now or later before planning."
+            : hasInvalidMeetup && unresolvedStations.length > 0
+            ? "Fix the meetup point and every rider's MRT/LRT station before planning."
+            : hasInvalidMeetup
+              ? "Fix the meetup point before planning any routes."
+              : "Pick a valid MRT/LRT station for every rider before planning any routes."
+        );
+        return;
+      }
+
+      setMessage("Checking verified Singapore cycling routes, then ranking them by fairness and route quality.");
       const participantDrafts = buildParticipantDrafts(participants);
       const hasCurrentResolvedParticipants = participantDrafts.every((participant) =>
         resolvedParticipants.some(
@@ -1004,6 +1025,8 @@ export function App() {
             ? "The cycling graph is unavailable right now. Try again shortly."
             : "Route planning hit an unexpected error. Try the same inputs again."
       );
+    } finally {
+      planningInFlightRef.current = false;
     }
   }
 
@@ -1563,6 +1586,17 @@ export function App() {
                   </div>
                 </div>
 
+                {results.zoneStatuses.some((zone) => zone.status !== "available") ? (
+                  <details className="coverage-details">
+                    <summary>Coverage details for this search</summary>
+                    <ul>
+                      {results.zoneStatuses.map((zone) => (
+                        <li key={zone.zoneId}>{zoneStatusCopy(zone)}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+
                 {totalRouteCount === 0 ? (
                   <div className="empty-filter-state">
                     <strong>No verified routes are available for that meetup point right now.</strong>
@@ -1575,7 +1609,7 @@ export function App() {
                         <h3>{section.title}</h3>
                         <p>
                           {section.id === "best-fair-routes"
-                            ? "These have exact ride-home checks and the strongest fairness after route quality is applied."
+                            ? "These have the strongest fairness after route quality is applied. Estimated cards refine as exact checks finish."
                             : section.id === "more-route-options"
                               ? "Useful backups when you want a different distance or finish. Estimated fairness stays here until exact checks run."
                               : "These exceed the usual fairness target, but remain visible so difficult groups still have honest options."}

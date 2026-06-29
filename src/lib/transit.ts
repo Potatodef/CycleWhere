@@ -25,10 +25,10 @@ function timeOfDayPenalty(departureIso: string) {
 
 export function estimateTransitMinutes(query: TransitTimeQuery) {
   const distanceKm = haversineKm(query.from, query.to);
-  const baseSpeedKmh = query.modeHint === "rail" ? 30 : 22;
+  const baseSpeedKmh = query.modeHint === "rail" ? 26 : 22;
   const walkPenalty = query.modeHint === "rail" ? 8 : 5;
-  const transferPenalty = query.modeHint === "rail" ? 5 : 2;
-  const routePenalty = clamp(distanceKm * 0.35, 1, 8);
+  const transferPenalty = query.modeHint === "rail" ? clamp(5 + distanceKm * 0.35, 5, 16) : 2;
+  const routePenalty = query.modeHint === "rail" ? clamp(distanceKm * 0.5, 1, 18) : clamp(distanceKm * 0.35, 1, 8);
 
   return Math.round(
     (distanceKm / baseSpeedKmh) * 60 +

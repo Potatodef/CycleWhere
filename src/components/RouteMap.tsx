@@ -171,17 +171,6 @@ export function RouteMap({
   }, [mapError, mapStyle]);
 
   useEffect(() => {
-    if (mapError) {
-      markersRef.current.forEach((marker) => marker.remove());
-      markersRef.current = [];
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
-      }
-    }
-  }, [mapError]);
-
-  useEffect(() => {
     const map = mapRef.current;
     if (!map || mapError) {
       return;

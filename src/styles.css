@@ -264,6 +264,28 @@ a {
   color: var(--muted);
 }
 
+.coverage-details {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-strong) 88%, var(--bg-accent) 12%);
+  color: var(--muted);
+}
+
+.coverage-details summary {
+  cursor: pointer;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.coverage-details ul {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+}
+
 .empty-filter-state {
   display: grid;
   gap: 10px;
@@ -656,6 +678,16 @@ input:focus-visible {
   margin-top: 18px;
 }
 
+@keyframes skeleton-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+
+  to {
+    background-position: 200% 0;
+  }
+}
+
 .route-loading-skeleton span {
   height: 82px;
   border-radius: 18px;
@@ -666,6 +698,14 @@ input:focus-visible {
     color-mix(in srgb, var(--brand) 8%, var(--surface-strong) 92%),
     var(--surface-strong)
   );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-loading-skeleton span {
+    animation: none;
+  }
 }
 
 .map-fallback-copy {

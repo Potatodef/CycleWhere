@@ -39,6 +39,7 @@ type TransitQueryBundle = Array<{
 }>;
 
 export const TRANSIT_HANDOFF_MINUTES = 10;
+const TRANSIT_ACCESS_WALKING_KMH = 5;
 
 function overlapRatio(a: string[], b: string[]) {
   const aSet = new Set(a);
@@ -149,17 +150,11 @@ function selectDiverseRoutes(candidates: RoutePlan[]) {
   const chosen: RoutePlan[] = [];
   const byScore = [...candidates].sort(compareRoutes);
   const bandCounts = new Map<string, number>();
-  const availableByBand = byScore.reduce<Map<string, number>>((counts, candidate) => {
-    const band = distanceBand(candidate.distanceKm);
-    counts.set(band, (counts.get(band) ?? 0) + 1);
-    return counts;
-  }, new Map());
 
   for (const candidate of byScore) {
     const band = distanceBand(candidate.distanceKm);
     const usedInBand = bandCounts.get(band) ?? 0;
-    const availableInBand = availableByBand.get(band) ?? 0;
-    const maxPerBand = availableInBand >= 5 ? 2 : 3;
+    const maxPerBand = 3;
     if (usedInBand >= maxPerBand) {
       continue;
     }
@@ -184,17 +179,23 @@ function similarRoute(a: RoutePlan, b: RoutePlan) {
   return overlap >= 0.75 && distanceDelta < 0.2;
 }
 
-function transitOriginPoint(candidate: RouteCandidate) {
-  return haversineKm(candidate.endpointAnchor.point, candidate.endpoint) < 1
-    ? candidate.endpoint
-    : candidate.endpointAnchor.point;
+function transitOrigin(candidate: RouteCandidate) {
+  const anchorDistanceKm = haversineKm(candidate.endpointAnchor.point, candidate.endpoint);
+  if (anchorDistanceKm <= 1) {
+    return {
+      point: candidate.endpoint,
+      accessMinutes: 0
+    };
+  }
+
+  return {
+    point: candidate.endpointAnchor.point,
+    accessMinutes: Math.ceil((anchorDistanceKm / TRANSIT_ACCESS_WALKING_KMH) * 60)
+  };
 }
 
 function toFairnessSection(route: RoutePlan): RouteSectionId {
-  if (route.fairnessSource !== "exact") {
-    return "more-route-options";
-  }
-  if (route.fairnessSpreadMinutes > 30 && route.majorityFriendly) {
+  if (route.fairnessSource === "exact" && route.fairnessSpreadMinutes > 30 && route.majorityFriendly) {
     return "majority-friendly-uneven";
   }
   return route.fairnessSpreadMinutes < 20 ? "best-fair-routes" : "more-route-options";
@@ -222,14 +223,15 @@ export function buildTransitQueries({
   const queries: TransitQueryBundle = [];
 
   for (const candidate of candidates) {
-    const transitDeparture = new Date(startTimeIso);
-    transitDeparture.setMinutes(
-      transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES
-    );
-    const departureIso = transitDeparture.toISOString();
-    const transitFrom = transitOriginPoint(candidate);
+    const { point: transitFrom, accessMinutes } = transitOrigin(candidate);
 
     for (const participant of participants) {
+      const transitDeparture = new Date(startTimeIso);
+      transitDeparture.setMinutes(
+        transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES + accessMinutes
+      );
+      const departureIso = transitDeparture.toISOString();
+
       queries.push({
         key: routeTransitKey({
           candidate,
@@ -257,12 +259,12 @@ function scoreCandidates({
   transitOverrides
 }: PlannerInput) {
   return candidates.map((candidate) => {
+    const { point: transitFrom, accessMinutes } = transitOrigin(candidate);
     const transitDeparture = new Date(startTimeIso);
     transitDeparture.setMinutes(
-      transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES
+      transitDeparture.getMinutes() + candidate.cyclingMinutes + TRANSIT_HANDOFF_MINUTES + accessMinutes
     );
     const departureIso = transitDeparture.toISOString();
-    const transitFrom = transitOriginPoint(candidate);
 
     const participantTimes = participants.map((participant) => {
       const transitKey = routeTransitKey({
@@ -272,7 +274,7 @@ function scoreCandidates({
         departureIso
       });
       const legacyTransitKey = legacyRouteTransitKey(candidate.id, participant.id);
-      const transitMinutes =
+      const baseTransitMinutes =
         transitOverrides?.[transitKey] ??
         transitOverrides?.[legacyTransitKey] ??
         estimateTransitMinutesBetween(
@@ -281,6 +283,7 @@ function scoreCandidates({
           departureIso,
           participant.anchor.kind
         );
+      const transitMinutes = accessMinutes + baseTransitMinutes;
 
       return {
         participantId: participant.id,

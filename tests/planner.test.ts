@@ -1,4 +1,5 @@
 import { classifyFairness, majorityFriendlySpread, spread, standardDeviation } from "../src/lib/fairness.js";
+import { haversineKm } from "../src/lib/geo.js";
 import { buildTransitQueries, planRoutes } from "../src/lib/planner.js";
 import { estimateTransitMinutes } from "../src/lib/transit.js";
 import type { ResolvedParticipant, RouteCandidate } from "../src/types.js";
@@ -160,6 +161,63 @@ describe("planner", () => {
 
     expect(routes.sections[0]?.id).toBe("best-fair-routes");
     expect(routes.sections[0]?.routes[0]?.id).toBe("best");
+  });
+
+  it("can place fair estimated routes in the best section before exact overrides arrive", () => {
+    const routes = planRoutes({
+      candidates: [routeCandidate({ id: "estimated-fair" })],
+      participants: [
+        participant("a", "A", 1.309, 103.88),
+        participant("b", "B", 1.312, 103.884)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    const route = routes.sections[0]?.routes[0];
+    expect(routes.sections[0]?.id).toBe("best-fair-routes");
+    expect(route?.id).toBe("estimated-fair");
+    expect(route?.fairnessSource).toBe("estimated");
+  });
+
+  it("adds access walking time when a route endpoint is far from its transit anchor", () => {
+    const endpoint = { lat: 1.31, lng: 103.88 };
+    const anchorPoint = { lat: 1.335, lng: 103.88 };
+    const accessMinutes = Math.ceil((haversineKm(endpoint, anchorPoint) / 5) * 60);
+    const farAnchorRoute = routeCandidate({
+      id: "far-anchor",
+      endpoint,
+      endpointAnchor: {
+        id: "anchor-far",
+        name: "Far MRT",
+        kind: "rail",
+        point: anchorPoint,
+        distanceFromHomeKm: 2.8,
+        fallbackSuggested: false
+      }
+    });
+
+    const [query] = buildTransitQueries({
+      candidates: [farAnchorRoute],
+      participants: [participant("a", "A", 1.3249, 103.9303)],
+      startTimeIso: "2026-06-18T18:30:00.000Z"
+    });
+
+    const expectedDeparture = new Date("2026-06-18T18:30:00.000Z");
+    expectedDeparture.setMinutes(expectedDeparture.getMinutes() + 24 + 10 + accessMinutes);
+    expect(query?.query.from).toEqual(anchorPoint);
+    expect(query?.query.departureIso).toBe(expectedDeparture.toISOString());
+
+    const planned = planRoutes({
+      candidates: [farAnchorRoute],
+      participants: [participant("a", "A", 1.3249, 103.9303)],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      transitOverrides: {
+        "far-anchor::a": 20
+      }
+    });
+
+    expect(planned.sections[0]?.routes[0]?.participantTimes[0]?.transitMinutes).toBe(20 + accessMinutes);
   });
 
   it("lets exact fairness outrank original search rank", () => {
@@ -324,8 +382,34 @@ describe("planner", () => {
       liveDiscoveryStatus: "available"
     });
 
-    const ids = routes.sections.flatMap((section) => section.routes.map((route) => route.id));
-    expect(ids).toEqual(["route-1", "route-2", "route-3"]);
+    const bestIds = routes.sections
+      .find((section) => section.id === "best-fair-routes")
+      ?.routes.map((route) => route.id);
+    expect(bestIds).toEqual(["route-1", "route-2", "route-3"]);
+  });
+
+  it("keeps three distinct routes in a crowded distance band", () => {
+    const routes = planRoutes({
+      candidates: [
+        routeCandidate({ id: "route-1", overlapSignature: ["a"], distanceKm: 11 }),
+        routeCandidate({ id: "route-2", overlapSignature: ["b"], distanceKm: 12 }),
+        routeCandidate({ id: "route-3", overlapSignature: ["c"], distanceKm: 13 }),
+        routeCandidate({ id: "route-4", overlapSignature: ["d"], distanceKm: 14 }),
+        routeCandidate({ id: "route-5", overlapSignature: ["e"], distanceKm: 15 })
+      ],
+      participants: [
+        participant("a", "A", 1.3249, 103.9303),
+        participant("b", "B", 1.3532, 103.944),
+        participant("c", "C", 1.3714, 103.893)
+      ],
+      startTimeIso: "2026-06-18T18:30:00.000Z",
+      liveDiscoveryStatus: "available"
+    });
+
+    const bestIds = routes.sections
+      .find((section) => section.id === "best-fair-routes")
+      ?.routes.map((route) => route.id);
+    expect(bestIds).toEqual(["route-1", "route-2", "route-3"]);
   });
 
   it("can surface uneven majority-friendly routes for clustered homes plus one outlier", () => {

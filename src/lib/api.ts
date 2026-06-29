@@ -18,17 +18,15 @@ const PRODUCTION_API_BASE = "https://cyclewhere-api-production.cyclewhere.worker
 
 export function getApiBase() {
   const configured =
-    (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ||
     (window as Window & {
       __CYCLEWHERE_CONFIG__?: { apiBase?: string };
-    }).__CYCLEWHERE_CONFIG__?.apiBase;
+    }).__CYCLEWHERE_CONFIG__?.apiBase ||
+    (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE;
   const isLocalProxy =
     configured === "/proxy-api" && !["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   return configured && !isLocalProxy ? configured : PRODUCTION_API_BASE;
 }
-
-const apiBase = getApiBase();
 
 function routeSearchError(message: string, code = "routing_unavailable", status?: number) {
   const error = new Error(message);
@@ -73,6 +71,7 @@ async function routeSearchResponse<T>(response: Response) {
 }
 
 export async function geocodeQueries(queries: string[]) {
+  const apiBase = getApiBase();
   if (apiBase) {
     try {
       const response = await fetch(`${apiBase}/api/geocode`, {
@@ -93,6 +92,7 @@ export async function geocodeQueries(queries: string[]) {
 }
 
 export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
+  const apiBase = getApiBase();
   if (apiBase) {
     try {
       const response = await fetch(`${apiBase}/api/transit-times`, {
@@ -116,6 +116,7 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
 }
 
 export async function createRouteSearch(request: RouteSearchRequest) {
+  const apiBase = getApiBase();
   let response: Response;
   try {
     response = await fetch(`${apiBase}/api/route-searches`, {
@@ -133,6 +134,7 @@ export async function createRouteSearch(request: RouteSearchRequest) {
 }
 
 export async function loadRouteSearchPage(pageToken: string) {
+  const apiBase = getApiBase();
   let response: Response;
   try {
     response = await fetch(
