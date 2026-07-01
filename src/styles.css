@@ -215,7 +215,8 @@ a {
   gap: 8px;
 }
 
-.field span {
+.field span,
+.field > label {
   font-size: 0.82rem;
   font-weight: 600;
   color: color-mix(in srgb, var(--text) 86%, white 14%);
@@ -553,6 +554,10 @@ input:focus-visible {
   box-shadow: var(--shadow-card);
 }
 
+.station-suggestions[hidden] {
+  display: none !important;
+}
+
 .station-suggestions.station-suggestions-above {
   top: auto;
   bottom: calc(100% + 8px);
@@ -573,7 +578,7 @@ input:focus-visible {
   background: color-mix(in srgb, var(--participant-accent, var(--brand)) 14%, white 86%);
 }
 
-.station-suggestion:hover {
+.station-suggestion:not(:disabled):hover {
   transform: translateY(-1px);
   background: white;
 }
@@ -626,15 +631,19 @@ input:focus-visible {
 }
 
 .primary-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.ghost-button:disabled,
+.icon-button:disabled,
+.route-select-button:disabled,
+.station-suggestion:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.primary-button:hover,
-.secondary-button:hover,
-.ghost-button:hover,
-.icon-button:hover,
+.primary-button:not(:disabled):hover,
+.secondary-button:not(:disabled):hover,
+.ghost-button:not(:disabled):hover,
+.icon-button:not(:disabled):hover,
 .route-card:hover {
   transform: translateY(-1px);
 }
@@ -703,6 +712,21 @@ input:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  input,
+  .station-suggestion,
+  .route-card {
+    transition: none;
+  }
+
+  .station-suggestion:hover,
+  .primary-button:hover,
+  .secondary-button:hover,
+  .ghost-button:hover,
+  .icon-button:hover,
+  .route-card:hover {
+    transform: none;
+  }
+
   .route-loading-skeleton span {
     animation: none;
   }

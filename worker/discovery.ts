@@ -1,9 +1,10 @@
 import { railStationSeeds } from "../src/lib/anchors.js";
 import { haversineKm } from "../src/lib/geo.js";
 import { homewardScore, medianHomeCentre } from "../src/lib/homeward.js";
-import { overlapRatio, routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
+import { routeOverlapRatio, routeQualityScore, routeSignature } from "../src/lib/routeUtils.js";
 import {
   getVerifiedNetwork,
+  listVerifiedBusAnchors,
   listVerifiedCandidatePoints,
   measureRouteCoverage
 } from "../src/lib/verifiedNetwork.js";
@@ -36,12 +37,19 @@ type DiscoveryDeps = {
   }) => Promise<RouteResponse | null>;
 };
 
+type RoutingAttemptStats = {
+  attempted: number;
+  systemicFailures: number;
+  noRouteOrQualityMisses: number;
+};
+
 export type DiscoveryResult = {
   routes: RouteCandidate[];
   diagnostics: CandidateEvaluation[];
   zoneStatuses: ZoneDiscoveryStatus[];
   liveDiscoveryStatus: "available" | "partial" | "unavailable";
   graphVersion: string;
+  routingAttemptStats: RoutingAttemptStats;
 };
 
 type GenericJob = {
@@ -60,10 +68,11 @@ const MIN_DIVERSE_ROUTE_BUCKETS = 6;
 const VERIFIED_COVERAGE_MINIMUM = 0.6;
 const ROUTING_PROFILES: RoutingProfile[] = ["official_protected", "official_quiet", "bicycle"];
 const RAIL_ANCHOR_RADIUS_KM = 1;
+const BUS_ANCHOR_RADIUS_KM = 0.4;
 const KM_TO_DEGREES = 1 / 110.574;
 
 function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
-  const overlap = overlapRatio(a.overlapSignature, b.overlapSignature);
+  const overlap = routeOverlapRatio(a, b);
   const baseDistance = Math.max(a.distanceKm, b.distanceKm, 1);
   const distanceDelta = Math.abs(a.distanceKm - b.distanceKm) / baseDistance;
   return overlap >= 0.75 && distanceDelta < 0.2;
@@ -71,6 +80,7 @@ function similarCandidate(a: RouteCandidate, b: RouteCandidate) {
 
 function nearestEligibleAnchor(point: LatLng) {
   let nearestRail: { anchor: (typeof railStationSeeds)[number]; distanceKm: number } | null = null;
+  let nearestBus: { anchor: ReturnType<typeof listVerifiedBusAnchors>[number]; distanceKm: number } | null = null;
   for (const anchor of railStationSeeds) {
     const maxDelta = RAIL_ANCHOR_RADIUS_KM * KM_TO_DEGREES * 1.2;
     if (
@@ -93,6 +103,34 @@ function nearestEligibleAnchor(point: LatLng) {
         kind: "rail" as const,
         point: nearestRail.anchor.point,
         distanceFromHomeKm: nearestRail.distanceKm,
+        fallbackSuggested: false
+      },
+      eligible: true
+    };
+  }
+
+  for (const anchor of listVerifiedBusAnchors()) {
+    const maxDelta = BUS_ANCHOR_RADIUS_KM * KM_TO_DEGREES * 1.2;
+    if (
+      Math.abs(anchor.point.lat - point.lat) > maxDelta ||
+      Math.abs(anchor.point.lng - point.lng) > maxDelta
+    ) {
+      continue;
+    }
+    const distanceKm = haversineKm(point, anchor.point);
+    if (!nearestBus || distanceKm < nearestBus.distanceKm) {
+      nearestBus = { anchor, distanceKm };
+    }
+  }
+
+  if (nearestBus && nearestBus.distanceKm <= BUS_ANCHOR_RADIUS_KM) {
+    return {
+      anchor: {
+        id: nearestBus.anchor.id,
+        name: nearestBus.anchor.name,
+        kind: "bus" as const,
+        point: nearestBus.anchor.point,
+        distanceFromHomeKm: nearestBus.distanceKm,
         fallbackSuggested: false
       },
       eligible: true
@@ -305,23 +343,43 @@ function buildGenericCandidate(
   return candidate;
 }
 
+function addRoutingStats(total: RoutingAttemptStats, delta: RoutingAttemptStats) {
+  total.attempted += delta.attempted;
+  total.systemicFailures += delta.systemicFailures;
+  total.noRouteOrQualityMisses += delta.noRouteOrQualityMisses;
+}
+
 async function runJob(job: GenericJob, start: LatLng, deps: DiscoveryDeps) {
   const routingProfiles = deps.routingProfiles ?? ROUTING_PROFILES;
+  const stats: RoutingAttemptStats = {
+    attempted: 0,
+    systemicFailures: 0,
+    noRouteOrQualityMisses: 0
+  };
   for (const profile of routingProfiles) {
-    const route = await deps.fetchRoute({ start, end: job.point, profile }).catch(() => null);
+    stats.attempted += 1;
+    let route: RouteResponse | null = null;
+    try {
+      route = await deps.fetchRoute({ start, end: job.point, profile });
+    } catch {
+      stats.systemicFailures += 1;
+      continue;
+    }
     if (
       !route ||
       route.distanceKm < MIN_ROUTE_DISTANCE_KM ||
       route.distanceKm > MAX_GENERIC_DISTANCE_KM
     ) {
+      stats.noRouteOrQualityMisses += 1;
       continue;
     }
     const candidate = buildGenericCandidate(job, route, profile);
     if (candidate) {
-      return [candidate];
+      return { candidates: [candidate], stats };
     }
+    stats.noRouteOrQualityMisses += 1;
   }
-  return [];
+  return { candidates: [], stats };
 }
 
 async function backfillRouteVariety({
@@ -329,6 +387,7 @@ async function backfillRouteVariety({
   pageJobs,
   routes,
   diagnostics,
+  routingAttemptStats,
   start,
   deps
 }: {
@@ -336,6 +395,7 @@ async function backfillRouteVariety({
   pageJobs: GenericJob[];
   routes: RouteCandidate[];
   diagnostics: CandidateEvaluation[];
+  routingAttemptStats: RoutingAttemptStats;
   start: LatLng;
   deps: DiscoveryDeps;
 }) {
@@ -365,7 +425,8 @@ async function backfillRouteVariety({
     }
     attempts += 1;
 
-    const candidates = await runJob(job, start, deps);
+    const { candidates, stats } = await runJob(job, start, deps);
+    addRoutingStats(routingAttemptStats, stats);
     const candidate = candidates.find((next) => !routes.some((route) => similarCandidate(route, next)));
     if (!candidate) {
       continue;
@@ -394,6 +455,11 @@ export async function discoverCyclingRoutes(
   const eligibleJobs = eligibleGenericJobs(genericJobs);
   const pageJobs = eligibleJobs.slice(0, deps.maxDiscoveryEndpoints ?? MAX_DISCOVERY_ENDPOINTS);
   const networkVersion = getVerifiedNetwork().version;
+  const routingAttemptStats: RoutingAttemptStats = {
+    attempted: 0,
+    systemicFailures: 0,
+    noRouteOrQualityMisses: 0
+  };
 
   if (pageJobs.length === 0) {
     return {
@@ -410,7 +476,8 @@ export async function discoverCyclingRoutes(
         } satisfies ZoneDiscoveryStatus
       ],
       liveDiscoveryStatus: "unavailable",
-      graphVersion: networkVersion
+      graphVersion: networkVersion,
+      routingAttemptStats
     };
   }
 
@@ -421,9 +488,17 @@ export async function discoverCyclingRoutes(
     const batch = pageJobs.slice(index, index + DISCOVERY_BATCH_SIZE);
     const batchResults = await Promise.all(
       batch.map(async (job) => {
-        const candidates = await runJob(job, request.start.point, deps);
+        const { candidates, stats } = await runJob(job, request.start.point, deps);
+        addRoutingStats(routingAttemptStats, stats);
         if (candidates.length === 0) {
-          diagnostics.push({ candidateId: job.id, accepted: false, reason: "route_or_quality_gate" });
+          diagnostics.push({
+            candidateId: job.id,
+            accepted: false,
+            reason:
+              stats.systemicFailures > 0 && stats.systemicFailures >= stats.attempted
+                ? "routing_systemic_failure"
+                : "route_or_quality_gate"
+          });
         } else {
           diagnostics.push(...candidates.map((candidate) => ({ candidateId: candidate.id, accepted: true })));
         }
@@ -441,6 +516,7 @@ export async function discoverCyclingRoutes(
     pageJobs,
     routes,
     diagnostics,
+    routingAttemptStats,
     start: request.start.point,
     deps
   });
@@ -458,18 +534,18 @@ export async function discoverCyclingRoutes(
         continue;
       }
       fallbackAttempts += 1;
-      const route = await deps
-        .fetchRoute({ start: request.start.point, end: job.point, profile: "bicycle" })
-        .catch(() => null);
-      if (!route || route.distanceKm < MIN_ROUTE_DISTANCE_KM || route.distanceKm > MAX_GENERIC_DISTANCE_KM) {
+      const { candidates, stats } = await runJob(job, request.start.point, {
+        ...deps,
+        routingProfiles: ["bicycle"]
+      });
+      addRoutingStats(routingAttemptStats, stats);
+      const fallback = candidates[0];
+      if (!fallback) {
         continue;
       }
-      const fallback = buildGenericCandidate(job, route, "bicycle", false);
-      if (fallback) {
-        routes.push(fallback);
-        diagnostics.push({ candidateId: fallback.id, accepted: true, reason: "all_bicycle_fallback" });
-        break;
-      }
+      routes.push(fallback);
+      diagnostics.push({ candidateId: fallback.id, accepted: true, reason: "all_bicycle_fallback" });
+      break;
     }
   }
 
@@ -498,6 +574,7 @@ export async function discoverCyclingRoutes(
       } satisfies ZoneDiscoveryStatus
     ],
     liveDiscoveryStatus,
-    graphVersion: networkVersion
+    graphVersion: networkVersion,
+    routingAttemptStats
   };
 }

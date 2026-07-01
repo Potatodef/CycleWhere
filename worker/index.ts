@@ -6,6 +6,7 @@ import { planRoutes } from "../src/lib/planner.js";
 import { estimateTransitMinutes } from "../src/lib/transit.js";
 import type {
   GeocodeResponse,
+  LatLng,
   ResolvedParticipant,
   RoutingProfile,
   RouteSearchError,
@@ -15,7 +16,11 @@ import type {
   TransitTimesResponse
 } from "../src/types.js";
 import { discoverCyclingRoutes } from "./discovery.js";
-import { fetchRouteWithGraphHopper, snapMeetupWithGraphHopper } from "./providers/graphhopper.js";
+import {
+  fetchRouteWithGraphHopper,
+  graphHopperProviderMode,
+  snapMeetupWithGraphHopper
+} from "./providers/graphhopper.js";
 import {
   hashRequest,
   loadRouteSearch,
@@ -52,10 +57,33 @@ type JsonParseResult<T> =
   | { ok: true; payload: T }
   | { ok: false; error: string };
 
+type RoutePayload = {
+  geometry: LatLng[];
+  graphEdgeIds?: string[];
+  distanceKm: number;
+  durationMinutes: number;
+};
+
 export const app = new Hono<{ Bindings: Bindings }>();
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://cyclewhere.pages.dev",
+  "https://www.cyclewhere.com"
+];
 const MAX_GEOCODE_QUERIES = 12;
 const MAX_TRANSIT_QUERIES = 40;
 const MAX_PARTICIPANTS = 10;
+const SECURITY_HEADERS = {
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-DNS-Prefetch-Control": "off",
+  "X-Download-Options": "noopen",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=(self), payment=(), usb=(), fullscreen=(self), accelerometer=(), gyroscope=(), magnetometer=()",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "credentialless"
+};
 const HOSTED_GRAPHHOPPER_LIMITS = {
   routingProfiles: ["bicycle"] as RoutingProfile[],
   maxDiscoveryEndpoints: 6,
@@ -65,29 +93,33 @@ const HOSTED_GRAPHHOPPER_LIMITS = {
 };
 
 function hasRoutingProvider(env: Bindings | undefined) {
-  return Boolean(env?.GRAPHHOPPER_BASE_URL || env?.GRAPHHOPPER_API_KEY);
+  return graphHopperProviderMode(env) !== "unconfigured";
 }
 
 function resolveCorsOrigin(origin: string | undefined, configuredOrigins: string | undefined) {
-  const allowlist = configuredOrigins
-    ?.split(",")
+  const allowlist = (configuredOrigins
+    ? configuredOrigins.split(",")
+    : DEFAULT_ALLOWED_ORIGINS)
     .map((value) => value.trim())
     .filter(Boolean);
 
-  if (!allowlist?.length) {
-    return origin || "*";
+  if (!origin || !allowlist.length) {
+    return undefined;
   }
 
-  if (!origin) {
-    return allowlist[0];
-  }
-
-  if (allowlist.includes("*") || allowlist.includes(origin)) {
+  if (allowlist.includes(origin)) {
     return origin;
   }
 
   return undefined;
 }
+
+app.use("*", async (context, next) => {
+  await next();
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    context.header(name, value);
+  }
+});
 
 app.use(
   "*",
@@ -167,6 +199,22 @@ function roundedKey(point: { lat: number; lng: number }) {
   return `${point.lat.toFixed(4)},${point.lng.toFixed(4)}`;
 }
 
+function resolvedGraphVersion(env: Bindings | undefined) {
+  return env?.GRAPH_VERSION ?? networkManifest.version;
+}
+
+function resolvedProfileHash(env: Bindings | undefined) {
+  return env?.PROFILE_HASH ?? "unversioned-profile";
+}
+
+function resolvedOverlayHash(env: Bindings | undefined) {
+  return env?.OVERLAY_HASH ?? `verified-network-${networkManifest.version}`;
+}
+
+function resolvedRankingHash(env: Bindings | undefined) {
+  return env?.RANKING_HASH ?? "fairness-homeward-v1";
+}
+
 async function readJson<T>(request: Request): Promise<JsonParseResult<T>> {
   try {
     return { ok: true, payload: (await request.json()) as T };
@@ -185,6 +233,38 @@ function isFiniteNumber(value: unknown): value is number {
 
 function validPoint(point: unknown): point is { lat: number; lng: number } {
   return isRecord(point) && isFiniteNumber(point.lat) && isFiniteNumber(point.lng);
+}
+
+function validGraphEdgeIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((edgeId) => typeof edgeId === "string" && edgeId.length > 0);
+}
+
+function validCachedRoutePayload(
+  value: unknown,
+  { requireEdgeIds }: { requireEdgeIds: boolean }
+): value is RoutePayload {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (
+    !Array.isArray(value.geometry) ||
+    value.geometry.length < 2 ||
+    !value.geometry.every(validPoint)
+  ) {
+    return false;
+  }
+  if (
+    !isFiniteNumber(value.distanceKm) ||
+    value.distanceKm <= 0 ||
+    !isFiniteNumber(value.durationMinutes) ||
+    value.durationMinutes <= 0
+  ) {
+    return false;
+  }
+  if (value.graphEdgeIds !== undefined && !validGraphEdgeIds(value.graphEdgeIds)) {
+    return false;
+  }
+  return !requireEdgeIds || Boolean(value.graphEdgeIds?.length);
 }
 
 function validIsoDate(value: unknown): value is string {
@@ -244,12 +324,49 @@ function transitCacheKey(query: TransitTimeQuery) {
   ].join("|");
 }
 
+function routeCacheKey({
+  env,
+  providerMode,
+  profile,
+  start,
+  end
+}: {
+  env: Bindings | undefined;
+  providerMode: ReturnType<typeof graphHopperProviderMode>;
+  profile: RoutingProfile;
+  start: LatLng;
+  end: LatLng;
+}) {
+  return JSON.stringify({
+    version: 5,
+    graphVersion: resolvedGraphVersion(env),
+    profileHash: resolvedProfileHash(env),
+    overlayHash: resolvedOverlayHash(env),
+    providerMode,
+    profile,
+    start: roundedKey(start),
+    end: roundedKey(end)
+  });
+}
+
+function systemicRoutingFailuresDominate(
+  stats: { attempted: number; systemicFailures: number } | undefined
+) {
+  if (!stats || stats.attempted <= 0 || stats.systemicFailures <= 0) {
+    return false;
+  }
+  return (
+    stats.systemicFailures === stats.attempted ||
+    (stats.systemicFailures >= 2 && stats.systemicFailures > stats.attempted / 2)
+  );
+}
+
 app.get("/api/health", (context) =>
   context.json({
     ok: true,
     service: "cyclewhere-api",
     routingConfigured: hasRoutingProvider(context.env),
-    graphVersion: context.env?.GRAPH_VERSION ?? networkManifest.version,
+    graphVersion: resolvedGraphVersion(context.env),
     profileHash: context.env?.PROFILE_HASH ?? null,
     overlayHash: context.env?.OVERLAY_HASH ?? null,
     rankingHash: context.env?.RANKING_HASH ?? null,
@@ -262,7 +379,7 @@ app.get("/api/readiness", async (context) => {
     routingConfigured: hasRoutingProvider(context.env),
     sessionsConfigured: Boolean(context.env.TRANSIT_CACHE && context.env.PAGE_TOKEN_SECRET),
     databaseReachable: false,
-    graphVersion: context.env?.GRAPH_VERSION ?? networkManifest.version,
+    graphVersion: resolvedGraphVersion(context.env),
     profileHash: context.env?.PROFILE_HASH ?? null,
     overlayHash: context.env?.OVERLAY_HASH ?? null,
     rankingHash: context.env?.RANKING_HASH ?? null
@@ -469,13 +586,15 @@ app.post("/api/route-searches", async (context) => {
     const searchId = crypto.randomUUID();
     routeSearchRequestId = searchId;
     const routeSearchStartedAt = Date.now();
+    const providerMode = graphHopperProviderMode(context.env);
     console.log("Route search started", {
       requestId: searchId,
       start: roundedKey(normalizedPayload.start.point),
       participantCount: normalizedPayload.participants.length,
-      hostedGraphHopper: Boolean(context.env.GRAPHHOPPER_API_KEY)
+      graphHopperMode: providerMode,
+      hostedGraphHopper: providerMode === "hosted"
     });
-    const hostedLimits = context.env.GRAPHHOPPER_API_KEY ? HOSTED_GRAPHHOPPER_LIMITS : null;
+    const hostedLimits = providerMode === "hosted" ? HOSTED_GRAPHHOPPER_LIMITS : null;
     const result = await discoverCyclingRoutes(normalizedPayload, {
       routingProfiles: hostedLimits?.routingProfiles,
       maxDiscoveryEndpoints: hostedLimits?.maxDiscoveryEndpoints,
@@ -483,13 +602,7 @@ app.post("/api/route-searches", async (context) => {
       maxFallbackEndpoints: hostedLimits?.maxFallbackEndpoints,
       minDiverseRouteBuckets: hostedLimits?.minDiverseRouteBuckets,
       fetchRoute: async ({ start, end, profile }) => {
-        const cacheKey = JSON.stringify({
-          version: 4,
-          graphVersion: context.env.GRAPH_VERSION ?? networkManifest.version,
-          profile,
-          start: roundedKey(start),
-          end: roundedKey(end)
-        });
+        const cacheKey = routeCacheKey({ env: context.env, providerMode, profile, start, end });
         let cached = null;
         try {
           cached = await getCachedJson(context.env.TRANSIT_CACHE, "route_cache", cacheKey);
@@ -497,7 +610,15 @@ app.post("/api/route-searches", async (context) => {
           console.error("Route cache read failed", error);
         }
         if (cached) {
-          return cached;
+          if (validCachedRoutePayload(cached, { requireEdgeIds: providerMode === "self-hosted" })) {
+            return cached;
+          }
+          console.warn("Ignoring invalid cached route payload", {
+            providerMode,
+            profile,
+            start: roundedKey(start),
+            end: roundedKey(end)
+          });
         }
 
         const route = await fetchRouteWithGraphHopper({ start, end, profile }, context.env);
@@ -511,6 +632,16 @@ app.post("/api/route-searches", async (context) => {
         return route;
       }
     });
+    if (systemicRoutingFailuresDominate(result.routingAttemptStats)) {
+      console.error("Route search failed because routing provider failures dominated", {
+        requestId: searchId,
+        routingAttemptStats: result.routingAttemptStats
+      });
+      return context.json<RouteSearchError>(
+        { error: "The routing service could not complete this search.", code: "routing_unavailable" },
+        503
+      );
+    }
     console.log("Route search discovery completed", {
       requestId: searchId,
       durationMs: Date.now() - routeSearchStartedAt,
@@ -566,10 +697,10 @@ app.post("/api/route-searches", async (context) => {
     );
     const search = {
       searchId,
-      graphVersion: context.env.GRAPH_VERSION ?? result.graphVersion,
-      profileHash: context.env.PROFILE_HASH ?? "unversioned-profile",
-      overlayHash: context.env.OVERLAY_HASH ?? networkManifest.version,
-      rankingHash: context.env.RANKING_HASH ?? "fairness-homeward-v1",
+      graphVersion: resolvedGraphVersion(context.env) ?? result.graphVersion,
+      profileHash: resolvedProfileHash(context.env),
+      overlayHash: resolvedOverlayHash(context.env),
+      rankingHash: resolvedRankingHash(context.env),
       requestHash: await hashRequest(normalizedPayload),
       snappedStart: snappedStart.point,
       expiresAt,

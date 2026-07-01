@@ -63,6 +63,17 @@ export type RouteMinutesSource = "onemap" | "distance-estimate";
 
 export type RouteFairnessSource = "estimated" | "exact";
 
+export type TransitTimeSource = "onemap" | "cache" | "estimate";
+
+export type TransitTimeOverride =
+  | number
+  | {
+      minutes: number;
+      source: TransitTimeSource;
+    };
+
+export type TransitTimeOverrides = Record<string, TransitTimeOverride>;
+
 export type RouteSectionId =
   | "best-fair-routes"
   | "more-route-options"
@@ -158,7 +169,7 @@ export type TransitTimeQuery = {
 
 export type TransitTimeResult = {
   minutes: number | null;
-  source: "onemap" | "estimate";
+  source: TransitTimeSource;
 };
 
 export type TransitTimesResponse = {

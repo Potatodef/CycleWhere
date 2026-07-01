@@ -12,19 +12,19 @@ CORS_ORIGIN = "http://127.0.0.1:5173,http://127.0.0.1:5174,http://localhost:5173
 GRAPHHOPPER_PROFILE_OFFICIAL = "cyclewhere_official"
 GRAPHHOPPER_PROFILE_QUIET = "cyclewhere_quiet"
 GRAPHHOPPER_PROFILE_BICYCLE = "cyclewhere_bicycle"
-GRAPH_VERSION = "2026-06-21"
+GRAPH_VERSION = "2026-06-29"
 PROFILE_HASH = "cyclewhere-profiles-v1"
-OVERLAY_HASH = "verified-network-2026-06-21"
+OVERLAY_HASH = "verified-network-2026-06-29"
 RANKING_HASH = "fairness-homeward-v1"
 
 [env.production.vars]
-CORS_ORIGIN = "https://cyclewhere.pages.dev"
+CORS_ORIGIN = "https://cyclewhere.pages.dev,https://www.cyclewhere.com"
 GRAPHHOPPER_PROFILE_OFFICIAL = "cyclewhere_official"
 GRAPHHOPPER_PROFILE_QUIET = "cyclewhere_quiet"
 GRAPHHOPPER_PROFILE_BICYCLE = "cyclewhere_bicycle"
-GRAPH_VERSION = "2026-06-21"
+GRAPH_VERSION = "2026-06-29"
 PROFILE_HASH = "cyclewhere-profiles-v1"
-OVERLAY_HASH = "verified-network-2026-06-21"
+OVERLAY_HASH = "verified-network-2026-06-29"
 RANKING_HASH = "fairness-homeward-v1"
 
 [[env.production.d1_databases]]

@@ -24,12 +24,13 @@ const mockState = vi.hoisted(() => ({
       sourceKinds: ["cycling-path"],
       nearbyFeatureIds: ["cycling-path-2"]
     }
-  ]
+  ],
+  busAnchors: [] as Array<{ id: string; name: string; point: { lat: number; lng: number } }>
 }));
 
 vi.mock("../src/lib/verifiedNetwork.js", () => ({
   listVerifiedCandidatePoints: () => mockState.candidatePoints,
-  listVerifiedBusAnchors: () => [],
+  listVerifiedBusAnchors: () => mockState.busAnchors,
   listVerifiedNamedRoutes: () => [],
   getVerifiedNetwork: () => ({ version: "2026-06-21" }),
   measureRouteCoverage: () => mockState.coverage.value
@@ -58,6 +59,7 @@ beforeEach(() => {
       nearbyFeatureIds: ["cycling-path-2"]
     }
   ];
+  mockState.busAnchors = [];
 });
 
 describe("live discovery", () => {
@@ -459,5 +461,180 @@ describe("live discovery", () => {
     expect(fetchRoute).toHaveBeenCalledTimes(1);
     expect(result.routes).toHaveLength(0);
     expect(result.liveDiscoveryStatus).toBe("unavailable");
+  });
+
+  it("does not return sub-threshold all-bicycle fallback routes as verified options", async () => {
+    mockState.coverage.value = {
+      verifiedCoverage: 0.304,
+      pcnCoverage: 0.1,
+      cyclingPathCoverage: 0.2,
+      mixedTrafficMeters: 5600,
+      sourceDatasets: ["d_8f468b25193f64be8a16fa7d8f60f553"],
+      sourceFeatureIds: ["cycling-path-1"]
+    };
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async ({ end }: { end: { lat: number; lng: number } }) => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: (1.2808 + end.lat) / 2, lng: (103.8545 + end.lng) / 2 },
+        end
+      ],
+      distanceKm: 8,
+      durationMinutes: 24
+    }));
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        maxDiversityBackfillEndpoints: 0,
+        maxFallbackEndpoints: 1,
+        routingProfiles: ["bicycle"],
+        fetchRoute
+      }
+    );
+
+    expect(fetchRoute).toHaveBeenCalledTimes(2);
+    expect(result.routes).toHaveLength(0);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.reason === "all_bicycle_fallback")).toBe(false);
+  });
+
+  it("tracks systemic routing failures separately from route quality misses", async () => {
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async () => {
+      throw Object.assign(new Error("GraphHopper unavailable"), {
+        routingFailureKind: "systemic"
+      });
+    });
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 2,
+        maxDiversityBackfillEndpoints: 0,
+        maxFallbackEndpoints: 0,
+        routingProfiles: ["bicycle"],
+        fetchRoute
+      }
+    );
+
+    expect(result.routes).toHaveLength(0);
+    expect(result.routingAttemptStats).toEqual({
+      attempted: 2,
+      systemicFailures: 2,
+      noRouteOrQualityMisses: 0
+    });
+    expect(result.diagnostics.every((diagnostic) => diagnostic.reason === "routing_systemic_failure")).toBe(true);
+  });
+
+  it("uses verified bus anchors when no rail anchor is in range", async () => {
+    const busOnlyPoint = { lat: 1.386, lng: 103.82 };
+    mockState.candidatePoints = [
+      {
+        id: "bus-only-candidate",
+        point: busOnlyPoint,
+        sourceKinds: ["cycling-path"],
+        nearbyFeatureIds: ["cycling-path-bus-only"]
+      }
+    ];
+    mockState.busAnchors = [
+      {
+        id: "bus-verified",
+        name: "Verified Bus Stop",
+        point: busOnlyPoint
+      }
+    ];
+    const { discoverCyclingRoutes } = await import("../worker/discovery.js");
+    const fetchRoute = vi.fn(async () => ({
+      geometry: [
+        { lat: 1.2808, lng: 103.8545 },
+        { lat: 1.33, lng: 103.84 },
+        busOnlyPoint
+      ],
+      distanceKm: 12,
+      durationMinutes: 36
+    }));
+
+    const result = await discoverCyclingRoutes(
+      {
+        start: {
+          label: "Marina Bay",
+          point: { lat: 1.2808, lng: 103.8545 }
+        },
+        departureIso: "2026-06-21T10:00:00.000Z",
+        participants: [
+          {
+            id: "a",
+            name: "A",
+            station: { lat: 1.3249, lng: 103.9303 },
+            anchor: {
+              id: "a-anchor",
+              name: "Bedok MRT",
+              kind: "rail",
+              point: { lat: 1.3249, lng: 103.9303 },
+              distanceFromHomeKm: 0.1,
+              fallbackSuggested: false
+            }
+          }
+        ]
+      },
+      {
+        maxDiscoveryEndpoints: 1,
+        maxDiversityBackfillEndpoints: 0,
+        maxFallbackEndpoints: 0,
+        routingProfiles: ["bicycle"],
+        fetchRoute
+      }
+    );
+
+    expect(fetchRoute).toHaveBeenCalledTimes(1);
+    expect(result.routes).toHaveLength(1);
+    expect(result.routes[0]?.endpointAnchor).toMatchObject({
+      id: "bus-verified",
+      name: "Verified Bus Stop",
+      kind: "bus"
+    });
   });
 });

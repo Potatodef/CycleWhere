@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchRouteWithGraphHopper, snapMeetupWithGraphHopper } from "../worker/providers/graphhopper.js";
+import {
+  fetchRouteWithGraphHopper,
+  graphHopperProviderMode,
+  GraphHopperSystemicError,
+  snapMeetupWithGraphHopper
+} from "../worker/providers/graphhopper.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -98,6 +103,48 @@ describe("GraphHopper route provenance", () => {
     expect(requestedUrl.searchParams.get("profile")).toBe("bike");
     expect(requestedUrl.searchParams.has("details")).toBe(false);
     expect(requestedUrl.searchParams.getAll("point")).toEqual(["1.3,103.8", "1.34,103.85"]);
+  });
+
+  it("uses self-hosted mode when both base URL and API key are configured", async () => {
+    let capturedUrl = "";
+    let capturedBody = "";
+    const fetchSpy = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      capturedBody = String(init?.body ?? "");
+      return new Response(
+        JSON.stringify({
+          paths: [
+            {
+              distance: 6200,
+              time: 1_500_000,
+              points: { coordinates: [[103.8, 1.3], [103.85, 1.34]] },
+              details: { edge_id: [[0, 1, 42]] }
+            }
+          ]
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await fetchRouteWithGraphHopper(
+      {
+        start: { lat: 1.3, lng: 103.8 },
+        end: { lat: 1.34, lng: 103.85 },
+        profile: "official_protected"
+      },
+      { GRAPHHOPPER_BASE_URL: "https://routing.example", GRAPHHOPPER_API_KEY: "test-key" }
+    );
+
+    expect(graphHopperProviderMode({ GRAPHHOPPER_BASE_URL: "https://routing.example", GRAPHHOPPER_API_KEY: "test-key" })).toBe(
+      "self-hosted"
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(capturedUrl).toBe("https://routing.example/route");
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      profile: "cyclewhere_official",
+      details: ["edge_id"]
+    });
   });
 
   it("accepts hosted routes without self-hosted graph edge IDs", async () => {
@@ -218,6 +265,56 @@ describe("GraphHopper route provenance", () => {
         { GRAPHHOPPER_API_KEY: "test-key" }
       )
     ).resolves.toBeNull();
+  });
+
+  it("treats self-hosted no-path responses as an unroutable candidate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ message: "Cannot find point" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHHOPPER_BASE_URL: "https://routing.example" }
+      )
+    ).resolves.toBeNull();
+  });
+
+  it("marks hosted provider failures as systemic", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ message: "upstream unavailable" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json" }
+        })
+      )
+    );
+
+    await expect(
+      fetchRouteWithGraphHopper(
+        {
+          start: { lat: 1.3, lng: 103.8 },
+          end: { lat: 1.34, lng: 103.85 },
+          profile: "bicycle"
+        },
+        { GRAPHHOPPER_API_KEY: "test-key" }
+      )
+    ).rejects.toMatchObject({
+      name: "GraphHopperSystemicError",
+      routingFailureKind: "systemic",
+      status: 503
+    } satisfies Partial<GraphHopperSystemicError>);
   });
 
   it("skips explicit nearest snapping in hosted API mode", async () => {

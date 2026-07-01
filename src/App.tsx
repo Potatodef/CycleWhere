@@ -17,10 +17,10 @@ import type {
   LocationResolution,
   PlannedRoutes,
   ResolvedParticipant,
-  RouteFairnessSource,
   RouteCandidate,
   RoutePlan,
   RouteSection,
+  TransitTimeOverrides,
   ZoneDiscoveryStatus
 } from "./types.js";
 
@@ -33,7 +33,7 @@ type WorkerRequest = {
   candidates: RouteCandidate[];
   participants: ResolvedParticipant[];
   startTimeIso: string;
-  transitOverrides?: Record<string, number>;
+  transitOverrides?: TransitTimeOverrides;
   zoneStatuses?: ZoneDiscoveryStatus[];
   liveDiscoveryStatus?: LiveDiscoveryStatus;
 };
@@ -48,6 +48,24 @@ type PlanningSession = Omit<WorkerRequest, "requestId"> & {
   searchId: string;
   expiresAt: string;
 };
+
+type RouteWorkKind = "plan" | "load-more" | "select-route";
+
+type RouteWorkToken = {
+  id: number;
+  inputVersion: number;
+  kind: RouteWorkKind;
+};
+
+const staleRouteWorkMessage = "Route planning was superseded by newer inputs.";
+
+function createStaleRouteWorkError() {
+  return new Error(staleRouteWorkMessage);
+}
+
+function isStaleRouteWorkError(error: unknown) {
+  return error instanceof Error && error.message === staleRouteWorkMessage;
+}
 
 const RouteMap = lazy(async () => {
   const module = await import("./components/RouteMap.js");
@@ -284,6 +302,10 @@ function routeDirectionLabel(route: RoutePlan, startLabel?: string) {
   return startLabel ? `${startLabel} to ${route.endpointName}` : route.endpointName;
 }
 
+function fairnessSourceLabel(route: RoutePlan) {
+  return route.fairnessSource === "exact" ? "OneMap transit fairness" : "Estimated transit fairness";
+}
+
 function AppSectionLabel({
   eyebrow,
   title,
@@ -308,6 +330,7 @@ function RouteCard({
   bestFairnessRouteId,
   selectedRouteId,
   expanded,
+  disabled,
   onSelect,
   onToggleDetails
 }: {
@@ -316,6 +339,7 @@ function RouteCard({
   bestFairnessRouteId?: string;
   selectedRouteId: string | null;
   expanded: boolean;
+  disabled: boolean;
   onSelect: (routeId: string) => void;
   onToggleDetails: (routeId: string) => void;
 }) {
@@ -330,7 +354,7 @@ function RouteCard({
           <p>{routeDirectionLabel(route, startLabel)}</p>
           <div className="chip-row">
             {bestFairnessRouteId === route.id ? <span className="chip">Best overall in section</span> : null}
-            <span className="chip">{route.fairnessSource === "exact" ? "Fairness updated" : "Estimated fairness"}</span>
+            <span className="chip">{fairnessSourceLabel(route)}</span>
             {route.origin === "named-route" ? <span className="chip">Named official route</span> : null}
             {route.officialRouteSurface === "mixed" ? <span className="chip">Mixed surface</span> : null}
           </div>
@@ -342,6 +366,7 @@ function RouteCard({
             type="button"
             className="route-select-button"
             aria-pressed={selectedRouteId === route.id}
+            disabled={disabled}
             onClick={() => onSelect(route.id)}
           >
             {selectedRouteId === route.id ? "Selected" : "Select route"}
@@ -449,7 +474,9 @@ export function App() {
     reject: (reason?: unknown) => void;
   } | null>(null);
   const workerRequestIdRef = useRef(0);
-  const planningInFlightRef = useRef(false);
+  const routeWorkIdRef = useRef(0);
+  const routeWorkInFlightRef = useRef<RouteWorkToken | null>(null);
+  const inputVersionRef = useRef(0);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
   const filterDialogRef = useRef<HTMLDialogElement>(null);
   const startInputRef = useRef<HTMLInputElement>(null);
@@ -508,6 +535,14 @@ export function App() {
         participants.map((participant) => [participant.id, participantPalette[participant.colorIndex]])
       ),
     [participants]
+  );
+
+  const participantMarkerColors = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(participantStyles).map(([id, value]) => [id, value.accentStrong])
+      ),
+    [participantStyles]
   );
 
   const filteredResults = useMemo(
@@ -576,6 +611,7 @@ export function App() {
   const googleMapsRouteUrl =
     resolvedStart && selectedRoute ? buildGoogleMapsRouteUrl(resolvedStart.point, selectedRoute) : null;
   const hasActiveRouteFilters = minimumDistanceKm > 0 || maximumFairnessSpreadMinutes > 0;
+  const isRouteWorkActive = status === "planning";
   const routeFilterSummary = [
     minimumDistanceKm > 0 ? `${minimumDistanceKm} km+` : null,
     maximumFairnessSpreadMinutes > 0 ? `Spread <= ${maximumFairnessSpreadMinutes} min` : null
@@ -667,6 +703,7 @@ export function App() {
   }, [activeStationFieldId, participants]);
 
   function clearResolvedState() {
+    invalidateRouteInputs();
     setResolvedStart(null);
     setResolvedParticipants([]);
     setResults(null);
@@ -679,9 +716,11 @@ export function App() {
     setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
     setHasCustomDepartureTime(false);
     setShowDeparturePicker(false);
+    resetPlannedState();
   }
 
   function resetPlannedState() {
+    invalidateRouteInputs();
     setResolvedParticipants([]);
     setResults(null);
     setPlanningSession(null);
@@ -689,7 +728,62 @@ export function App() {
     setExpandedRouteIds([]);
   }
 
+  function isRouteWorkCurrent(token: RouteWorkToken) {
+    const current = routeWorkInFlightRef.current;
+    return (
+      current?.id === token.id &&
+      current.inputVersion === token.inputVersion &&
+      inputVersionRef.current === token.inputVersion
+    );
+  }
+
+  function assertRouteWorkCurrent(token: RouteWorkToken) {
+    if (!isRouteWorkCurrent(token)) {
+      throw createStaleRouteWorkError();
+    }
+  }
+
+  function beginRouteWork(kind: RouteWorkKind) {
+    if (routeWorkInFlightRef.current) {
+      return null;
+    }
+
+    const token = {
+      id: (routeWorkIdRef.current += 1),
+      inputVersion: inputVersionRef.current,
+      kind
+    } satisfies RouteWorkToken;
+    routeWorkInFlightRef.current = token;
+    setStatus("planning");
+    return token;
+  }
+
+  function finishRouteWork(token: RouteWorkToken) {
+    if (routeWorkInFlightRef.current?.id !== token.id) {
+      return;
+    }
+
+    routeWorkInFlightRef.current = null;
+    setStatus("idle");
+  }
+
+  function invalidateRouteInputs() {
+    inputVersionRef.current += 1;
+
+    if (!routeWorkInFlightRef.current) {
+      return;
+    }
+
+    routeWorkInFlightRef.current = null;
+    workerPromiseRef.current?.reject(createStaleRouteWorkError());
+    workerPromiseRef.current = null;
+    setStatus("idle");
+  }
+
   function updateParticipant(id: string, key: "name" | "station", value: string) {
+    if (key === "name") {
+      invalidateRouteInputs();
+    }
     if (key === "station") {
       setInvalidStationIds((current) => current.filter((currentId) => currentId !== id));
       dismissedStationFieldIdRef.current = null;
@@ -732,8 +826,10 @@ export function App() {
     resetPlannedState();
   }
 
-  async function resolveInputs(start: LocationResolution) {
+  async function resolveInputs(start: LocationResolution, token: RouteWorkToken) {
     const people = await resolveParticipants(buildParticipantDrafts(participants));
+    assertRouteWorkCurrent(token);
+
     const resolved = {
       start: {
         label: start.label,
@@ -748,13 +844,14 @@ export function App() {
     return resolved;
   }
 
-  async function resolveParticipantsWithKnownStart() {
+  async function resolveParticipantsWithKnownStart(token: RouteWorkToken) {
     const start = resolvedStart;
     if (!start) {
       throw new Error("Resolved start is missing.");
     }
 
     const people = await resolveParticipants(buildParticipantDrafts(participants));
+    assertRouteWorkCurrent(token);
 
     setResolvedParticipants(people);
     return {
@@ -763,7 +860,9 @@ export function App() {
     };
   }
 
-  async function runPlanner(request: WorkerRequest) {
+  async function runPlanner(request: WorkerRequest, token: RouteWorkToken) {
+    assertRouteWorkCurrent(token);
+
     return new Promise<PlannedRoutes>((resolve, reject) => {
       workerPromiseRef.current?.reject(new Error("Route planning was superseded by a newer request."));
       workerPromiseRef.current = { requestId: request.requestId, resolve, reject };
@@ -788,11 +887,19 @@ export function App() {
     return ids;
   }
 
-  async function rerankSession(session: PlanningSession, forceExactRouteIds: string[] = []) {
+  async function rerankSession(
+    session: PlanningSession,
+    forceExactRouteIds: string[] = [],
+    token: RouteWorkToken
+  ) {
+    assertRouteWorkCurrent(token);
+
     const estimatedPlan = await runPlanner({
       ...session,
       requestId: (workerRequestIdRef.current += 1)
-    });
+    }, token);
+    assertRouteWorkCurrent(token);
+
     const limit = exactCandidateLimit(session.participants.length);
     const exactIds = Array.from(
       new Set(forceExactRouteIds.concat(pickExactCandidateIds(estimatedPlan, limit)))
@@ -820,14 +927,19 @@ export function App() {
     }
 
     const transitResults = await fetchTransitTimes(transitQueryBundle.map((item) => item.query));
-    const nextOverrides = {
+    assertRouteWorkCurrent(token);
+
+    const nextOverrides: TransitTimeOverrides = {
       ...(session.transitOverrides ?? {})
     };
 
     transitResults.forEach((result, index) => {
       const key = transitQueryBundle[index]?.key;
       if (key && typeof result.minutes === "number") {
-        nextOverrides[key] = result.minutes;
+        nextOverrides[key] = {
+          minutes: result.minutes,
+          source: result.source
+        };
       }
     });
 
@@ -842,11 +954,15 @@ export function App() {
       plannedRoutes: await runPlanner({
         ...nextSession,
         requestId: (workerRequestIdRef.current += 1)
-      })
+      }, token)
     };
   }
 
   function useCurrentLocation() {
+    if (routeWorkInFlightRef.current) {
+      return;
+    }
+
     if (!navigator.geolocation) {
       setMessage("Current location is unavailable in this browser.");
       return;
@@ -869,6 +985,7 @@ export function App() {
         setStartFieldMessage(
           landed.snapped ? "Current location looked offshore, so it was snapped to the nearest land anchor." : null
         );
+        setActiveStationFieldId(null);
         setResolvedStart({
           label: landed.label,
           point: landed.point,
@@ -893,12 +1010,12 @@ export function App() {
   }
 
   async function handlePlan() {
-    if (planningInFlightRef.current || status !== "idle") {
+    const token = beginRouteWork("plan");
+    if (!token) {
       return;
     }
 
-    planningInFlightRef.current = true;
-    setStatus("planning");
+    setActiveStationFieldId(null);
     setMessage("Validating meetup point and rider stations.");
 
     try {
@@ -906,6 +1023,8 @@ export function App() {
       const [startResolution] = trimmedStartQuery && !resolvedStart
         ? await geocodeQueries([trimmedStartQuery])
         : [null];
+      assertRouteWorkCurrent(token);
+
       const startMoment = hasCustomDepartureTime ? scheduledStartTime : formatIsoLocal(roundToFiveMinutes());
       const startDate = new Date(startMoment);
       const unresolvedStations = participants
@@ -941,7 +1060,7 @@ export function App() {
             stationInputRefs.current[firstInvalidStation]?.focus();
           }
         });
-        setStatus("idle");
+        finishRouteWork(token);
         setMessage(
           hasPastDepartureTime
             ? "Pick a departure time that is now or later before planning."
@@ -968,9 +1087,11 @@ export function App() {
         resolvedStart && hasCurrentResolvedParticipants
           ? Promise.resolve({ start: resolvedStart, participants: resolvedParticipants })
           : resolvedStart
-            ? resolveParticipantsWithKnownStart()
-            : resolveInputs(startResolution!);
+            ? resolveParticipantsWithKnownStart(token)
+            : resolveInputs(startResolution!, token);
       const resolved = await prepareResolved;
+      assertRouteWorkCurrent(token);
+
       const planningStartIso = new Date(startMoment).toISOString();
       const discovered = await createRouteSearch({
         start: resolved.start,
@@ -982,6 +1103,8 @@ export function App() {
           anchor: participant.anchor
         }))
       });
+      assertRouteWorkCurrent(token);
+
       const initialSession = {
         candidates: discovered.routes,
         participants: resolved.participants,
@@ -994,13 +1117,14 @@ export function App() {
         searchId: discovered.searchId,
         expiresAt: discovered.expiresAt
       } satisfies PlanningSession;
-      const { session, plannedRoutes } = await rerankSession(initialSession);
+      const { session, plannedRoutes } = await rerankSession(initialSession, [], token);
+      assertRouteWorkCurrent(token);
 
       setPlanningSession(session);
       setResults(plannedRoutes);
       setSelectedRouteId(plannedRoutes.sections[0]?.routes[0]?.id ?? null);
       setExpandedRouteIds([]);
-      setStatus("idle");
+      finishRouteWork(token);
       setMessage(
         plannedRoutes.sections.length === 0
           ? "No verified routes were available for that meetup point right now. Try another start or try again."
@@ -1011,8 +1135,12 @@ export function App() {
               : "Verified route discovery is unavailable right now."
       );
     } catch (error) {
+      if (isStaleRouteWorkError(error)) {
+        return;
+      }
+
       workerPromiseRef.current = null;
-      setStatus("idle");
+      finishRouteWork(token);
       setPlanningSession(null);
       setResults(null);
       setSelectedRouteId(null);
@@ -1027,21 +1155,29 @@ export function App() {
             : "Route planning hit an unexpected error. Try the same inputs again."
       );
     } finally {
-      planningInFlightRef.current = false;
+      finishRouteWork(token);
     }
   }
 
   async function handleLoadMore() {
-    if (!planningSession?.nextPageToken) {
+    const sessionSnapshot = planningSession;
+    if (!sessionSnapshot?.nextPageToken) {
       return;
     }
 
-    setStatus("planning");
+    const token = beginRouteWork("load-more");
+    if (!token) {
+      return;
+    }
+
+    setActiveStationFieldId(null);
     setMessage("Loading more official route candidates.");
 
     try {
-      const discovered = await loadRouteSearchPage(planningSession.nextPageToken);
-      const mergedCandidates = [...planningSession.candidates];
+      const discovered = await loadRouteSearchPage(sessionSnapshot.nextPageToken);
+      assertRouteWorkCurrent(token);
+
+      const mergedCandidates = [...sessionSnapshot.candidates];
       for (const candidate of discovered.routes) {
         if (!mergedCandidates.some((existing) => existing.id === candidate.id)) {
           mergedCandidates.push(candidate);
@@ -1049,20 +1185,25 @@ export function App() {
       }
 
       const nextSession = {
-        ...planningSession,
+        ...sessionSnapshot,
         candidates: mergedCandidates,
         zoneStatuses: discovered.zoneStatuses,
         liveDiscoveryStatus: discovered.liveDiscoveryStatus,
         nextPageToken: discovered.nextPageToken
       } satisfies PlanningSession;
-      const reranked = await rerankSession(nextSession);
+      const reranked = await rerankSession(nextSession, [], token);
+      assertRouteWorkCurrent(token);
 
       setPlanningSession(reranked.session);
       setResults(reranked.plannedRoutes);
-      setStatus("idle");
+      finishRouteWork(token);
       setMessage("Loaded more official route options.");
     } catch (error) {
-      setStatus("idle");
+      if (isStaleRouteWorkError(error)) {
+        return;
+      }
+
+      finishRouteWork(token);
       setMessage(
         (error as { code?: string })?.code === "search_expired"
           ? "This route search expired. Plan again to refresh the results."
@@ -1070,11 +1211,13 @@ export function App() {
             ? "The routing service could not be reached. Check your connection and try again."
           : "Loading more routes failed. Try again."
       );
+    } finally {
+      finishRouteWork(token);
     }
   }
 
   async function handleSelectRoute(routeId: string) {
-    if (status !== "idle") {
+    if (routeWorkInFlightRef.current) {
       return;
     }
 
@@ -1092,23 +1235,47 @@ export function App() {
       return;
     }
 
-    setStatus("planning");
-    setMessage("Checking exact ride-home times for the selected route.");
+    const token = beginRouteWork("select-route");
+    if (!token) {
+      return;
+    }
+
+    setActiveStationFieldId(null);
+    setMessage("Checking ride-home times for the selected route.");
 
     try {
-      const reranked = await rerankSession(planningSession, [routeId]);
+      const reranked = await rerankSession(planningSession, [routeId], token);
+      assertRouteWorkCurrent(token);
+
+      const refreshedRoute = reranked.plannedRoutes.sections
+        .flatMap((section) => section.routes)
+        .find((route) => route.id === routeId);
       setPlanningSession(reranked.session);
       setResults(reranked.plannedRoutes);
       setSelectedRouteId(routeId);
-      setStatus("idle");
-      setMessage("Selected route refreshed with exact ride-home times.");
-    } catch {
-      setStatus("idle");
-      setMessage("Could not refresh exact ride-home times for that route.");
+      finishRouteWork(token);
+      setMessage(
+        refreshedRoute?.fairnessSource === "exact"
+          ? "Selected route refreshed with OneMap ride-home times."
+          : "Selected route refreshed with estimated ride-home times."
+      );
+    } catch (error) {
+      if (isStaleRouteWorkError(error)) {
+        return;
+      }
+
+      finishRouteWork(token);
+      setMessage("Could not refresh ride-home times for that route.");
+    } finally {
+      finishRouteWork(token);
     }
   }
 
   function loadExample() {
+    if (routeWorkInFlightRef.current) {
+      return;
+    }
+
     setStartQuery("Marina Bay");
     setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
     setHasCustomDepartureTime(false);
@@ -1136,6 +1303,10 @@ export function App() {
   }
 
   function selectStationSuggestion(participant: ParticipantInput, index: number, stationName: string) {
+    if (routeWorkInFlightRef.current) {
+      return;
+    }
+
     updateParticipant(participant.id, "station", stationName);
     dismissedStationFieldIdRef.current = participant.id;
     setActiveStationFieldId(null);
@@ -1209,14 +1380,16 @@ export function App() {
                 <strong>Choose the shared meetup point first.</strong>
                 <p>This is where the ride begins before everyone heads home on their own route.</p>
               </div>
-              <label className="field">
-                <span>Meetup point</span>
+              <div className="field">
+                <label htmlFor="meetup-point-input">Meetup point</label>
                 <div className="field-inline">
                   <input
+                    id="meetup-point-input"
                     ref={startInputRef}
                     className={invalidStartQuery ? "invalid-input" : undefined}
                     aria-invalid={invalidStartQuery}
                     aria-describedby={startFieldMessage ? "meetup-point-error" : undefined}
+                    disabled={isRouteWorkActive}
                     value={startQuery}
                     onChange={(event) => {
                       setInvalidStartQuery(false);
@@ -1230,13 +1403,13 @@ export function App() {
                     type="button"
                     className="secondary-button field-inline-button"
                     onClick={useCurrentLocation}
-                    disabled={isLocatingStart}
+                    disabled={isRouteWorkActive || isLocatingStart}
                   >
                     {isLocatingStart ? "Locating..." : "Use current location"}
                   </button>
                 </div>
                 {startFieldMessage ? <span id="meetup-point-error" className="field-error">{startFieldMessage}</span> : null}
-              </label>
+              </div>
               <div className="start-card-foot">
                 <span className="time-chip">Used for every route option</span>
                 <span>Try a station, park, or landmark the whole group can meet at.</span>
@@ -1259,6 +1432,7 @@ export function App() {
                 <button
                   type="button"
                   className="secondary-button"
+                  disabled={isRouteWorkActive}
                   onClick={() => {
                     if (!showDeparturePicker && !hasCustomDepartureTime) {
                       setScheduledStartTime(formatIsoLocal(roundToFiveMinutes()));
@@ -1269,7 +1443,7 @@ export function App() {
                   {showDeparturePicker ? "Hide calendar" : hasCustomDepartureTime ? "Change time" : "Pick later time"}
                 </button>
                 {hasCustomDepartureTime ? (
-                  <button type="button" className="ghost-button" onClick={resetDepartureTime}>
+                  <button type="button" className="ghost-button" onClick={resetDepartureTime} disabled={isRouteWorkActive}>
                     Use now
                   </button>
                 ) : null}
@@ -1282,9 +1456,11 @@ export function App() {
                     value={scheduledStartTime}
                     min={formatIsoLocal(roundToFiveMinutes())}
                     step={300}
+                    disabled={isRouteWorkActive}
                     onChange={(event) => {
                       setScheduledStartTime(event.target.value);
                       setHasCustomDepartureTime(true);
+                      resetPlannedState();
                     }}
                   />
                 </label>
@@ -1296,7 +1472,7 @@ export function App() {
                 <h3>Riders</h3>
                 <p>Enter each person&apos;s name and the MRT station they usually say they stay near.</p>
               </div>
-              <button type="button" className="ghost-button" onClick={loadExample}>
+              <button type="button" className="ghost-button" onClick={loadExample} disabled={isRouteWorkActive}>
                 Load example
               </button>
             </div>
@@ -1304,6 +1480,8 @@ export function App() {
             <div className="participant-list">
               {participants.map((participant, index) => {
                 const colors = participantStyles[participant.id];
+                const participantNameInputId = `participant-name-${participant.id}`;
+                const stationInputId = `station-input-${participant.id}`;
                 const stationSuggestionListId = `station-suggestions-${participant.id}`;
                 const isStationSuggestionOpen = activeStationFieldId === participant.id;
                 const stationSuggestions = getStationRecommendations(participant.station);
@@ -1330,6 +1508,7 @@ export function App() {
                         <button
                           type="button"
                           className="icon-button"
+                          disabled={isRouteWorkActive}
                           onClick={() => removeParticipant(participant.id)}
                           aria-label={`Remove rider ${index + 1}`}
                         >
@@ -1339,17 +1518,19 @@ export function App() {
                     </div>
 
                     <div className="participant-card-fields">
-                      <label className="field compact-field">
-                        <span>Name</span>
+                      <div className="field compact-field">
+                        <label htmlFor={participantNameInputId}>Name</label>
                         <input
+                          id={participantNameInputId}
                           maxLength={40}
+                          disabled={isRouteWorkActive}
                           value={participant.name}
                           onChange={(event) => updateParticipant(participant.id, "name", event.target.value)}
                           placeholder={`Rider ${index + 1}`}
                         />
-                      </label>
-                      <label className="field compact-field">
-                        <span>MRT station</span>
+                      </div>
+                      <div className="field compact-field">
+                        <label htmlFor={stationInputId}>MRT station</label>
                         <div
                           className="field-with-suggestions"
                           data-station-field-id={participant.id}
@@ -1363,10 +1544,12 @@ export function App() {
                           }}
                         >
                           <input
+                            id={stationInputId}
                             ref={(element) => {
                               stationInputRefs.current[participant.id] = element;
                             }}
                             maxLength={60}
+                            disabled={isRouteWorkActive}
                             role="combobox"
                             aria-autocomplete="list"
                             aria-expanded={isStationSuggestionOpen}
@@ -1421,6 +1604,7 @@ export function App() {
                                 role="option"
                                 aria-selected={stationName === findExactStation(participant.station)?.name}
                                 className={`station-suggestion ${stationName === findExactStation(participant.station)?.name ? "selected" : ""}`}
+                                disabled={isRouteWorkActive}
                                 onMouseDown={(event) => event.preventDefault()}
                                 onKeyDown={(event) => {
                                   if (event.key === "ArrowDown") {
@@ -1457,7 +1641,7 @@ export function App() {
                             ))}
                           </div>
                         </div>
-                      </label>
+                      </div>
                     </div>
                   </div>
                 );
@@ -1469,7 +1653,7 @@ export function App() {
                 type="button"
                 className="secondary-button"
                 onClick={addParticipant}
-                disabled={participants.length >= 10}
+                disabled={isRouteWorkActive || participants.length >= 10}
               >
                 Add rider
               </button>
@@ -1477,7 +1661,7 @@ export function App() {
                 type="button"
                 className="primary-button dark"
                 onClick={handlePlan}
-                disabled={status !== "idle"}
+                disabled={isRouteWorkActive || isLocatingStart}
               >
                 {status === "planning" ? "Planning..." : "Plan routes"}
               </button>
@@ -1518,9 +1702,7 @@ export function App() {
                 <RouteMap
                   start={resolvedStart}
                   participants={previewParticipants}
-                  participantMarkerColors={Object.fromEntries(
-                    Object.entries(participantStyles).map(([id, value]) => [id, value.accentStrong])
-                  )}
+                  participantMarkerColors={participantMarkerColors}
                   selectedRoute={selectedRoute}
                   mapStyle="osm-bright"
                 />
@@ -1625,6 +1807,7 @@ export function App() {
                         bestFairnessRouteId={section.bestFairnessRouteId}
                         selectedRouteId={effectiveSelectedRouteId}
                         expanded={expandedRouteIds.includes(route.id)}
+                        disabled={isRouteWorkActive}
                         onSelect={handleSelectRoute}
                         onToggleDetails={toggleRouteDetails}
                       />
@@ -1645,7 +1828,7 @@ export function App() {
                       type="button"
                       className="secondary-button"
                       onClick={handleLoadMore}
-                      disabled={status !== "idle"}
+                      disabled={isRouteWorkActive}
                     >
                       {status === "planning" ? "Loading..." : "Load more routes"}
                     </button>

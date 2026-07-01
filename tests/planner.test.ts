@@ -2,7 +2,14 @@ import { classifyFairness, majorityFriendlySpread, spread, standardDeviation } f
 import { haversineKm } from "../src/lib/geo.js";
 import { buildTransitQueries, planRoutes } from "../src/lib/planner.js";
 import { estimateTransitMinutes } from "../src/lib/transit.js";
-import type { ResolvedParticipant, RouteCandidate } from "../src/types.js";
+import type {
+  ResolvedParticipant,
+  RouteCandidate,
+  TransitTimeOverrides,
+  TransitTimeSource
+} from "../src/types.js";
+
+const START_TIME_ISO = "2026-06-18T18:30:00.000Z";
 
 function participant(id: string, name: string, lat: number, lng: number): ResolvedParticipant {
   return {
@@ -62,6 +69,32 @@ function routeCandidate(overrides: Partial<RouteCandidate> = {}): RouteCandidate
     overlapSignature: overrides.overlapSignature ?? ["a->b", "b->c"],
     cyclingMinutesSource: overrides.cyclingMinutesSource ?? "onemap"
   };
+}
+
+function sourcedTransitOverrides({
+  candidate,
+  participants,
+  source,
+  minutes
+}: {
+  candidate: RouteCandidate;
+  participants: ResolvedParticipant[];
+  source: TransitTimeSource;
+  minutes: number[];
+}) {
+  const overrides: TransitTimeOverrides = {};
+  const queries = buildTransitQueries({
+    candidates: [candidate],
+    participants,
+    startTimeIso: START_TIME_ISO
+  });
+  queries.forEach((query, index) => {
+    overrides[query.key] = {
+      minutes: minutes[index] ?? minutes[minutes.length - 1] ?? 0,
+      source
+    };
+  });
+  return overrides;
 }
 
 describe("fairness", () => {
@@ -180,6 +213,52 @@ describe("planner", () => {
     expect(route?.fairnessSource).toBe("estimated");
   });
 
+  it("keeps fallback transit override sources estimated", () => {
+    const candidate = routeCandidate({ id: "fallback-estimate" });
+    const participants = [
+      participant("a", "A", 1.3249, 103.9303),
+      participant("b", "B", 1.3532, 103.944)
+    ];
+    const routes = planRoutes({
+      candidates: [candidate],
+      participants,
+      startTimeIso: START_TIME_ISO,
+      transitOverrides: sourcedTransitOverrides({
+        candidate,
+        participants,
+        source: "estimate",
+        minutes: [20, 22]
+      })
+    });
+
+    const route = routes.sections[0]?.routes[0];
+    expect(route?.participantTimes.map((time) => time.transitMinutes)).toEqual([20, 22]);
+    expect(route?.fairnessSource).toBe("estimated");
+  });
+
+  it("marks OneMap transit override sources exact", () => {
+    const candidate = routeCandidate({ id: "onemap-exact" });
+    const participants = [
+      participant("a", "A", 1.3249, 103.9303),
+      participant("b", "B", 1.3532, 103.944)
+    ];
+    const routes = planRoutes({
+      candidates: [candidate],
+      participants,
+      startTimeIso: START_TIME_ISO,
+      transitOverrides: sourcedTransitOverrides({
+        candidate,
+        participants,
+        source: "onemap",
+        minutes: [20, 22]
+      })
+    });
+
+    const route = routes.sections[0]?.routes[0];
+    expect(route?.participantTimes.map((time) => time.transitMinutes)).toEqual([20, 22]);
+    expect(route?.fairnessSource).toBe("exact");
+  });
+
   it("adds access walking time when a route endpoint is far from its transit anchor", () => {
     const endpoint = { lat: 1.31, lng: 103.88 };
     const anchorPoint = { lat: 1.335, lng: 103.88 };
@@ -244,6 +323,7 @@ describe("planner", () => {
       "fairer-exact",
       "server-first"
     ]);
+    expect(routes.sections[0]?.routes.every((route) => route.fairnessSource === "exact")).toBe(true);
   });
 
   it("prefers a fair route with a shorter journey home and keeps uneven alternatives", () => {

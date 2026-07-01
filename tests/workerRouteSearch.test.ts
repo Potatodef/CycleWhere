@@ -12,6 +12,8 @@ vi.mock("../worker/discovery.js", () => ({
 }));
 
 vi.mock("../worker/providers/graphhopper.js", () => ({
+  graphHopperProviderMode: (env: { GRAPHHOPPER_BASE_URL?: string; GRAPHHOPPER_API_KEY?: string } | undefined) =>
+    env?.GRAPHHOPPER_BASE_URL ? "self-hosted" : env?.GRAPHHOPPER_API_KEY ? "hosted" : "unconfigured",
   snapMeetupWithGraphHopper: async (point: LatLng) => ({ point, distanceMeters: 0 }),
   fetchRouteWithGraphHopper: vi.fn()
 }));
@@ -72,6 +74,7 @@ function longGeometry(pointCount: number): LatLng[] {
 
 describe("route-search worker", () => {
   beforeEach(() => {
+    discoverCyclingRoutes.mockReset();
     loadRouteSearch.mockReset();
     readPageToken.mockReset();
     storeRouteSearch.mockReset();
@@ -137,6 +140,69 @@ describe("route-search worker", () => {
     expect(maxFallbackEndpoints).toBe(4);
     expect(minDiverseRouteBuckets).toBe(4);
     expect(routingProfiles).toEqual(["bicycle"]);
+  });
+
+  it("does not apply hosted GraphHopper caps when a self-hosted base URL is configured with an API key", async () => {
+    let maxDiscoveryEndpoints: number | undefined = 0;
+    let maxDiversityBackfillEndpoints: number | undefined = 0;
+    let maxFallbackEndpoints: number | undefined = 0;
+    let minDiverseRouteBuckets: number | undefined = 0;
+    let routingProfiles: string[] | undefined;
+    discoverCyclingRoutes.mockImplementationOnce(async (_request, deps) => {
+      maxDiscoveryEndpoints = deps.maxDiscoveryEndpoints;
+      maxDiversityBackfillEndpoints = deps.maxDiversityBackfillEndpoints;
+      maxFallbackEndpoints = deps.maxFallbackEndpoints;
+      minDiverseRouteBuckets = deps.minDiverseRouteBuckets;
+      routingProfiles = deps.routingProfiles;
+      return {
+        routes: [candidate()],
+        diagnostics: [],
+        zoneStatuses: [],
+        liveDiscoveryStatus: "available",
+        graphVersion: "test"
+      };
+    });
+    const { app } = await import("../worker/index.js");
+
+    const response = await app.request(
+      "/api/route-searches",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start: { label: "Marina Bay", point: { lat: 1.2808, lng: 103.8545 } },
+          departureIso: "2026-06-23T13:30:00.000Z",
+          participants: [
+            {
+              id: "a",
+              name: "A",
+              station: { lat: 1.32403889, lng: 103.93003611 },
+              anchor: {
+                id: "bedok-mrt",
+                name: "Bedok MRT",
+                kind: "rail",
+                point: { lat: 1.32403889, lng: 103.93003611 },
+                distanceFromHomeKm: 0,
+                fallbackSuggested: false
+              }
+            }
+          ]
+        })
+      },
+      {
+        TRANSIT_CACHE: {},
+        PAGE_TOKEN_SECRET: "secret",
+        GRAPHHOPPER_BASE_URL: "https://routing.example",
+        GRAPHHOPPER_API_KEY: "hosted-key"
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(maxDiscoveryEndpoints).toBeUndefined();
+    expect(maxDiversityBackfillEndpoints).toBeUndefined();
+    expect(maxFallbackEndpoints).toBeUndefined();
+    expect(minDiverseRouteBuckets).toBeUndefined();
+    expect(routingProfiles).toBeUndefined();
   });
 
   it("strips route signatures from materialized route-search payloads", async () => {
@@ -286,6 +352,59 @@ describe("route-search worker", () => {
 
     expect(response.status).toBe(200);
     expect(payload.routes).toEqual([]);
+  });
+
+  it("surfaces routing_unavailable when systemic provider failures dominate discovery", async () => {
+    discoverCyclingRoutes.mockImplementationOnce(async () => ({
+      routes: [],
+      diagnostics: [{ candidateId: "candidate-a", accepted: false, reason: "routing_systemic_failure" }],
+      zoneStatuses: [],
+      liveDiscoveryStatus: "unavailable",
+      graphVersion: "test",
+      routingAttemptStats: {
+        attempted: 3,
+        systemicFailures: 2,
+        noRouteOrQualityMisses: 1
+      }
+    }));
+    const { app } = await import("../worker/index.js");
+
+    const response = await app.request(
+      "/api/route-searches",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start: { label: "Marina Bay", point: { lat: 1.2808, lng: 103.8545 } },
+          departureIso: "2026-06-23T13:30:00.000Z",
+          participants: [
+            {
+              id: "a",
+              name: "A",
+              station: { lat: 1.32403889, lng: 103.93003611 },
+              anchor: {
+                id: "bedok-mrt",
+                name: "Bedok MRT",
+                kind: "rail",
+                point: { lat: 1.32403889, lng: 103.93003611 },
+                distanceFromHomeKm: 0,
+                fallbackSuggested: false
+              }
+            }
+          ]
+        })
+      },
+      {
+        TRANSIT_CACHE: {},
+        PAGE_TOKEN_SECRET: "secret",
+        GRAPHHOPPER_API_KEY: "hosted-key"
+      }
+    );
+    const payload = (await response.json()) as { code: string };
+
+    expect(response.status).toBe(503);
+    expect(payload.code).toBe("routing_unavailable");
+    expect(storeRouteSearch).not.toHaveBeenCalled();
   });
 
   it("dedupes duplicate discovered route IDs before materializing results", async () => {

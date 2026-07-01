@@ -15,6 +15,9 @@ import type {
 } from "../types.js";
 
 const PRODUCTION_API_BASE = "https://cyclewhere-api-production.cyclewhere.workers.dev";
+const API_REQUEST_TIMEOUT_MS = 10_000;
+const API_REQUEST_MAX_ATTEMPTS = 3;
+const API_RETRY_BASE_DELAY_MS = 250;
 
 export function getApiBase() {
   const configured =
@@ -32,6 +35,71 @@ function routeSearchError(message: string, code = "routing_unavailable", status?
   const error = new Error(message);
   Object.assign(error, { code, status });
   return error;
+}
+
+function isRetriableStatus(status: number) {
+  return status === 408 || status === 429 || (status >= 500 && status < 600);
+}
+
+function retryDelay(attempt: number) {
+  return API_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = API_REQUEST_TIMEOUT_MS
+) {
+  const controller = new AbortController();
+  const { signal, ...requestInit } = init;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  const abortFromParent = () => controller.abort();
+  if (signal?.aborted) {
+    controller.abort();
+  } else {
+    signal?.addEventListener("abort", abortFromParent, { once: true });
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  }
+
+  try {
+    return await fetch(input, {
+      ...requestInit,
+      signal: controller.signal
+    });
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    signal?.removeEventListener("abort", abortFromParent);
+  }
+}
+
+async function fetchWithRetry(input: RequestInfo | URL, init: RequestInit = {}) {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= API_REQUEST_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(input, init);
+      if (isRetriableStatus(response.status) && attempt < API_REQUEST_MAX_ATTEMPTS) {
+        await wait(retryDelay(attempt));
+        continue;
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (init.signal?.aborted || attempt === API_REQUEST_MAX_ATTEMPTS) {
+        throw error;
+      }
+      await wait(retryDelay(attempt));
+    }
+  }
+
+  throw lastError;
 }
 
 async function routeJson<T>(response: Response) {
@@ -74,7 +142,7 @@ export async function geocodeQueries(queries: string[]) {
   const apiBase = getApiBase();
   if (apiBase) {
     try {
-      const response = await fetch(`${apiBase}/api/geocode`, {
+      const response = await fetchWithRetry(`${apiBase}/api/geocode`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ queries })
@@ -95,7 +163,7 @@ export async function fetchTransitTimes(queries: TransitTimeQuery[]) {
   const apiBase = getApiBase();
   if (apiBase) {
     try {
-      const response = await fetch(`${apiBase}/api/transit-times`, {
+      const response = await fetchWithRetry(`${apiBase}/api/transit-times`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ queries })
@@ -119,7 +187,7 @@ export async function createRouteSearch(request: RouteSearchRequest) {
   const apiBase = getApiBase();
   let response: Response;
   try {
-    response = await fetch(`${apiBase}/api/route-searches`, {
+    response = await fetchWithRetry(`${apiBase}/api/route-searches`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request)
@@ -137,7 +205,7 @@ export async function loadRouteSearchPage(pageToken: string) {
   const apiBase = getApiBase();
   let response: Response;
   try {
-    response = await fetch(
+    response = await fetchWithRetry(
       `${apiBase}/api/route-searches/page?token=${encodeURIComponent(pageToken)}`
     );
   } catch {

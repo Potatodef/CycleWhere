@@ -111,6 +111,14 @@ function isMappablePoint(point: { lat: number; lng: number }) {
   return Number.isFinite(point.lat) && Number.isFinite(point.lng);
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+function buildViewportSignature(points: Array<{ lat: number; lng: number }>) {
+  return points.map((point) => `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`).join("|");
+}
+
 export function RouteMap({
   start,
   participants,
@@ -120,6 +128,8 @@ export function RouteMap({
 }: RouteMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  const currentStyleRef = useRef<MapStyleId | null>(null);
+  const lastViewportSignatureRef = useRef<string | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const [mapError, setMapError] = useState<string | null>(null);
 
@@ -141,6 +151,7 @@ export function RouteMap({
       setMapError("Map preview unavailable in this browser. The planner still works.");
       return;
     }
+    currentStyleRef.current = mapStyle;
 
     map.on("error", (event) => {
       const errorMessage =
@@ -157,16 +168,22 @@ export function RouteMap({
     return () => {
       map.remove();
       mapRef.current = null;
+      currentStyleRef.current = null;
+      lastViewportSignatureRef.current = null;
     };
-  }, [mapError, mapStyle]);
+  }, [mapError]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || mapError) {
       return;
     }
+    if (currentStyleRef.current === mapStyle) {
+      return;
+    }
 
     map.setStyle(getMapStyle(mapStyle));
+    currentStyleRef.current = mapStyle;
     hardenBlankTargetLinks(map.getContainer());
   }, [mapError, mapStyle]);
 
@@ -283,14 +300,22 @@ export function RouteMap({
       }
 
       if (points.length > 0) {
+        const viewportSignature = buildViewportSignature(points);
+        if (lastViewportSignatureRef.current === viewportSignature) {
+          return;
+        }
+        lastViewportSignatureRef.current = viewportSignature;
+
         const bounds = points.reduce(
           (accumulator, point) => accumulator.extend([point.lng, point.lat]),
           new maplibregl.LngLatBounds([points[0].lng, points[0].lat], [points[0].lng, points[0].lat])
         );
         map.fitBounds(bounds, {
           padding: 52,
-          duration: 600
+          duration: prefersReducedMotion() ? 0 : 600
         });
+      } else {
+        lastViewportSignatureRef.current = null;
       }
     };
 

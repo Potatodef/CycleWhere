@@ -42,6 +42,8 @@ vi.mock("../src/lib/verifiedNetwork.js", () => ({
 }));
 
 vi.mock("../worker/providers/graphhopper.js", () => ({
+  graphHopperProviderMode: (env: { GRAPHHOPPER_BASE_URL?: string; GRAPHHOPPER_API_KEY?: string } | undefined) =>
+    env?.GRAPHHOPPER_BASE_URL ? "self-hosted" : env?.GRAPHHOPPER_API_KEY ? "hosted" : "unconfigured",
   snapMeetupWithGraphHopper: async (point: LatLng) => ({ point, distanceMeters: 0 }),
   fetchRouteWithGraphHopper: vi.fn(async ({ start, end }: { start: LatLng; end: LatLng }) => ({
     geometry: Array.from({ length: 1501 }, (_, index) => {
@@ -162,5 +164,83 @@ describe("route-search load example regression", () => {
     expect(payload.routes.length).toBeGreaterThan(0);
     expect(payload.routes.every((route) => route.geometry.length === 1501)).toBe(true);
     expect(payload.routes.every((route) => route.overlapSignature.length === 0)).toBe(true);
+  });
+
+  it("ignores self-hosted cached routes without graph edge IDs and keys by provider identity", async () => {
+    const graphhopper = await import("../worker/providers/graphhopper.js");
+    const fetchRouteMock = vi.mocked(graphhopper.fetchRouteWithGraphHopper);
+    fetchRouteMock.mockClear();
+    const selectedCacheKeys: string[] = [];
+    const fakeD1 = {
+      prepare: (sql: string) => ({
+        bind: (...values: unknown[]) => ({
+          first: async () => {
+            if (sql.includes("SELECT payload FROM route_cache")) {
+              selectedCacheKeys.push(String(values[0]));
+              return {
+                payload: JSON.stringify({
+                  geometry: [
+                    { lat: 1.2808, lng: 103.8545 },
+                    { lat: 1.32403889, lng: 103.93003611 }
+                  ],
+                  distanceKm: 10,
+                  durationMinutes: 30
+                })
+              };
+            }
+            return null;
+          },
+          run: async () => ({})
+        })
+      })
+    };
+    const { app } = await import("../worker/index.js");
+
+    const response = await app.request(
+      "/api/route-searches",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          start: { label: "Marina Bay", point: { lat: 1.2808, lng: 103.8545 } },
+          departureIso: "2026-06-24T10:30:00.000Z",
+          participants: [
+            {
+              id: "1",
+              name: "Ariel",
+              station: { lat: 1.32403889, lng: 103.93003611 },
+              anchor: {
+                id: "bedok-mrt",
+                name: "Bedok MRT",
+                kind: "rail",
+                point: { lat: 1.32403889, lng: 103.93003611 },
+                distanceFromHomeKm: 0,
+                fallbackSuggested: false
+              }
+            }
+          ]
+        })
+      },
+      {
+        TRANSIT_CACHE: fakeD1,
+        PAGE_TOKEN_SECRET: "secret",
+        GRAPHHOPPER_BASE_URL: "https://routing.example",
+        GRAPHHOPPER_API_KEY: "hosted-key",
+        GRAPH_VERSION: "graph-v",
+        PROFILE_HASH: "profile-v",
+        OVERLAY_HASH: "overlay-v"
+      }
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchRouteMock).toHaveBeenCalled();
+    expect(selectedCacheKeys.length).toBeGreaterThan(0);
+    expect(JSON.parse(selectedCacheKeys[0]!)).toMatchObject({
+      version: 5,
+      graphVersion: "graph-v",
+      profileHash: "profile-v",
+      overlayHash: "overlay-v",
+      providerMode: "self-hosted"
+    });
   });
 });

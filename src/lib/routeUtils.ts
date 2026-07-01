@@ -63,3 +63,13 @@ export function overlapRatio(a: string[], b: string[]) {
   const union = new Set([...aSet, ...bSet]).size || 1;
   return intersection / union;
 }
+
+export function routeOverlapRatio(
+  a: Pick<RouteCandidate, "graphEdgeIds" | "overlapSignature">,
+  b: Pick<RouteCandidate, "graphEdgeIds" | "overlapSignature">
+) {
+  if (a.graphEdgeIds?.length && b.graphEdgeIds?.length) {
+    return overlapRatio(a.graphEdgeIds, b.graphEdgeIds);
+  }
+  return overlapRatio(a.overlapSignature, b.overlapSignature);
+}

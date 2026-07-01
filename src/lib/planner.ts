@@ -16,6 +16,8 @@ import type {
   RoutePlan,
   RouteSection,
   RouteSectionId,
+  TransitTimeOverride,
+  TransitTimeOverrides,
   ZoneDiscoveryStatus
 } from "../types.js";
 
@@ -23,7 +25,7 @@ type PlannerInput = {
   candidates: RouteCandidate[];
   participants: ResolvedParticipant[];
   startTimeIso: string;
-  transitOverrides?: Record<string, number>;
+  transitOverrides?: TransitTimeOverrides;
   zoneStatuses?: ZoneDiscoveryStatus[];
   liveDiscoveryStatus?: LiveDiscoveryStatus;
 };
@@ -40,6 +42,11 @@ type TransitQueryBundle = Array<{
 
 export const TRANSIT_HANDOFF_MINUTES = 10;
 const TRANSIT_ACCESS_WALKING_KMH = 5;
+
+type NormalizedTransitOverride = {
+  minutes: number;
+  exact: boolean;
+};
 
 function routeTransitKey({
   candidate,
@@ -64,6 +71,33 @@ function routeTransitKey({
 
 function legacyRouteTransitKey(routeId: string, participantId: string) {
   return `${routeId}::${participantId}`;
+}
+
+function normalizeTransitOverride(
+  override: TransitTimeOverride | undefined
+): NormalizedTransitOverride | null {
+  if (typeof override === "number") {
+    return Number.isFinite(override) ? { minutes: override, exact: true } : null;
+  }
+  if (!override || !Number.isFinite(override.minutes)) {
+    return null;
+  }
+
+  return {
+    minutes: override.minutes,
+    exact: override.source === "onemap" || override.source === "cache"
+  };
+}
+
+function findTransitOverride(
+  transitOverrides: TransitTimeOverrides | undefined,
+  transitKey: string,
+  legacyTransitKey: string
+) {
+  return (
+    normalizeTransitOverride(transitOverrides?.[transitKey]) ??
+    normalizeTransitOverride(transitOverrides?.[legacyTransitKey])
+  );
 }
 
 function distanceBand(value: number) {
@@ -266,9 +300,9 @@ function scoreCandidates({
         departureIso
       });
       const legacyTransitKey = legacyRouteTransitKey(candidate.id, participant.id);
+      const override = findTransitOverride(transitOverrides, transitKey, legacyTransitKey);
       const baseTransitMinutes =
-        transitOverrides?.[transitKey] ??
-        transitOverrides?.[legacyTransitKey] ??
+        override?.minutes ??
         estimateTransitMinutesBetween(
           transitFrom,
           participant.anchor.point,
@@ -287,18 +321,20 @@ function scoreCandidates({
 
     const times = participantTimes.map((participant) => participant.transitMinutes);
     const verifiedCoverage = candidate.verifiedCoverage ?? 0;
-    const fairnessSource = participants.every(
-      (participant) =>
-        (transitOverrides?.[
-          routeTransitKey({
-            candidate,
-            participant,
-            transitFrom,
-            departureIso
-          })
-        ] ??
-          transitOverrides?.[legacyRouteTransitKey(candidate.id, participant.id)]) !== undefined
-    )
+    const fairnessSource = participants.every((participant) => {
+      const transitKey = routeTransitKey({
+        candidate,
+        participant,
+        transitFrom,
+        departureIso
+      });
+      const override = findTransitOverride(
+        transitOverrides,
+        transitKey,
+        legacyRouteTransitKey(candidate.id, participant.id)
+      );
+      return override?.exact === true;
+    })
       ? "exact"
       : "estimated";
 

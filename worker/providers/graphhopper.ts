@@ -33,12 +33,38 @@ type NormalizedGraphHopperRoute = {
   durationMinutes: number;
 };
 
+export type GraphHopperProviderMode = "hosted" | "self-hosted" | "unconfigured";
+
+export class GraphHopperSystemicError extends Error {
+  readonly routingFailureKind = "systemic";
+  readonly status?: number;
+
+  constructor(message: string, options: { status?: number; cause?: unknown } = {}) {
+    super(message);
+    this.name = "GraphHopperSystemicError";
+    this.status = options.status;
+    if (options.cause !== undefined) {
+      this.cause = options.cause;
+    }
+  }
+}
+
 function graphHopperApiKey(env: GraphHopperEnv) {
   return env.GRAPHHOPPER_API_KEY;
 }
 
+export function graphHopperProviderMode(env: GraphHopperEnv | undefined): GraphHopperProviderMode {
+  if (env?.GRAPHHOPPER_BASE_URL) {
+    return "self-hosted";
+  }
+  if (env?.GRAPHHOPPER_API_KEY) {
+    return "hosted";
+  }
+  return "unconfigured";
+}
+
 function hostedApiEnabled(env: GraphHopperEnv) {
-  return Boolean(graphHopperApiKey(env) && !env.GRAPHHOPPER_BASE_URL);
+  return graphHopperProviderMode(env) === "hosted";
 }
 
 function routeProfile(env: GraphHopperEnv, profile: RoutingProfile) {
@@ -84,7 +110,7 @@ function normalizeGraphHopperPath(
 
   const graphEdgeIds = path.details?.edge_id?.map((detail) => String(detail[2])) ?? [];
   if (requireEdgeIds && graphEdgeIds.length === 0) {
-    throw new Error("GraphHopper route did not include edge provenance.");
+    throw new GraphHopperSystemicError("GraphHopper route did not include edge provenance.");
   }
 
   return {
@@ -93,6 +119,16 @@ function normalizeGraphHopperPath(
     distanceKm: path.distance / 1000,
     durationMinutes: Math.max(1, Math.round(path.time / 60000))
   };
+}
+
+async function fetchGraphHopper(input: string | URL | Request, init?: RequestInit) {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    throw new GraphHopperSystemicError("GraphHopper request failed before receiving a response.", {
+      cause: error
+    });
+  }
 }
 
 export async function snapMeetupWithGraphHopper(point: LatLng, env: GraphHopperEnv) {
@@ -112,13 +148,19 @@ export async function snapMeetupWithGraphHopper(point: LatLng, env: GraphHopperE
     point: `${point.lat},${point.lng}`,
     profile: routeProfile(env, "bicycle")
   });
-  const response = await fetch(`${base}/nearest?${params}`, {
+  const response = await fetchGraphHopper(`${base}/nearest?${params}`, {
     headers: env.GRAPHHOPPER_BEARER_TOKEN
       ? { Authorization: `Bearer ${env.GRAPHHOPPER_BEARER_TOKEN}` }
       : undefined
   });
   if (!response.ok) {
-    throw new Error(`GraphHopper nearest-edge lookup failed with ${response.status}.`);
+    if (response.status === 400 || response.status === 404) {
+      return null;
+    }
+    throw new GraphHopperSystemicError(
+      `GraphHopper nearest-edge lookup failed with ${response.status}.`,
+      { status: response.status }
+    );
   }
   const result = (await response.json()) as GraphHopperNearestResponse;
   if (
@@ -154,21 +196,23 @@ export async function fetchRouteWithGraphHopper(
     params.append("point", `${input.start.lat},${input.start.lng}`);
     params.append("point", `${input.end.lat},${input.end.lng}`);
 
-    const response = await fetch(`https://graphhopper.com/api/1/route?${params.toString()}`);
+    const response = await fetchGraphHopper(`https://graphhopper.com/api/1/route?${params.toString()}`);
     if (!response.ok) {
       if (response.status === 400 || response.status === 404) {
         return null;
       }
-      throw new Error(`GraphHopper hosted route failed with ${response.status}.`);
+      throw new GraphHopperSystemicError(`GraphHopper hosted route failed with ${response.status}.`, {
+        status: response.status
+      });
     }
     const payload = (await response.json()) as GraphHopperResponse;
     return normalizeGraphHopperPath(payload.paths?.[0], { requireEdgeIds: false });
   }
 
   if (!env.GRAPHHOPPER_BASE_URL) {
-    throw new Error("GraphHopper is not configured.");
+    throw new GraphHopperSystemicError("GraphHopper is not configured.");
   }
-  const response = await fetch(`${env.GRAPHHOPPER_BASE_URL.replace(/\/$/, "")}/route`, {
+  const response = await fetchGraphHopper(`${env.GRAPHHOPPER_BASE_URL.replace(/\/$/, "")}/route`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -189,7 +233,12 @@ export async function fetchRouteWithGraphHopper(
     })
   });
   if (!response.ok) {
-    throw new Error(`GraphHopper route failed with ${response.status}.`);
+    if (response.status === 400 || response.status === 404) {
+      return null;
+    }
+    throw new GraphHopperSystemicError(`GraphHopper route failed with ${response.status}.`, {
+      status: response.status
+    });
   }
   const payload = (await response.json()) as GraphHopperResponse;
   return normalizeGraphHopperPath(payload.paths?.[0], { requireEdgeIds: true });
