@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="CycleWhere — an archived UI concept for fairer group cycling routes in Singapore." />
+    <title>CycleWhere — UI concept archive</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="CycleWhere home">
+        <span class="brand-mark" aria-hidden="true">↝</span>
+        <span>CycleWhere</span>
+      </a>
+      <span class="archive-pill">Concept archive</span>
+    </header>
+
+    <main id="top">
+      <section class="hero panel">
+        <p class="eyebrow">Singapore group route planner</p>
+        <h1>Find a cycling route that still leaves the ride home feeling fair.</h1>
+        <p class="hero-copy">
+          One meetup point, each rider's nearest MRT or LRT station, and route endings compared by how balanced the trip home feels for the whole group.
+        </p>
+        <div class="tags" aria-label="Product characteristics">
+          <span>2 to 10 riders</span>
+          <span>MRT-first inputs</span>
+          <span>Mobile-friendly cards</span>
+        </div>
+      </section>
+
+      <section class="idea-section" aria-labelledby="idea-title">
+        <div>
+          <p class="eyebrow">The idea</p>
+          <h2 id="idea-title">A route can be great and still be unfair.</h2>
+        </div>
+        <div class="idea-copy">
+          <p>
+            Most planners optimise the ride itself. CycleWhere explored a second question: after the group ride ends, how difficult is it for each person to get home?
+          </p>
+          <p>
+            Riders choose a shared start and the train station they live near. The interface compares plausible cycling routes, then surfaces endings that keep the longest and shortest onward journeys reasonably close.
+          </p>
+        </div>
+      </section>
+
+      <section class="principles" aria-label="Product principles">
+        <article class="principle panel">
+          <span>01</span>
+          <h3>Meet in one place</h3>
+          <p>Start with a landmark, station, or park the whole group can reach.</p>
+        </article>
+        <article class="principle panel">
+          <span>02</span>
+          <h3>Plan for everyone</h3>
+          <p>Use nearby MRT or LRT stations instead of collecting home addresses.</p>
+        </article>
+        <article class="principle panel">
+          <span>03</span>
+          <h3>Compare the ride home</h3>
+          <p>Make trade-offs visible so the group can choose together.</p>
+        </article>
+      </section>
+
+      <section class="gallery-section" aria-labelledby="gallery-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Interface</p>
+            <h2 id="gallery-title">The product in pictures</h2>
+          </div>
+          <p>Captured during the final round of UI work.</p>
+        </div>
+
+        <div class="gallery">
+          <button class="shot shot-wide" type="button" data-image="assets/overview.png" data-alt="CycleWhere desktop overview">
+            <img src="assets/overview.png" alt="CycleWhere desktop overview" />
+            <span><strong>Desktop overview</strong> The planning workspace and route preview.</span>
+          </button>
+          <button class="shot" type="button" data-image="assets/route-results.png" data-alt="CycleWhere route results on desktop">
+            <img src="assets/route-results.png" alt="CycleWhere route results on desktop" />
+            <span><strong>Route comparison</strong> Fairness, journey time, and route details.</span>
+          </button>
+          <button class="shot shot-mobile" type="button" data-image="assets/mobile-results.png" data-alt="CycleWhere route results on mobile">
+            <img src="assets/mobile-results.png" alt="CycleWhere route results on mobile" />
+            <span><strong>Mobile flow</strong> Inputs, map preview, and results in one scroll.</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="sunset panel" aria-labelledby="sunset-title">
+        <p class="eyebrow">Project status</p>
+        <h2 id="sunset-title">Archived as a product concept.</h2>
+        <p>
+          CycleWhere is no longer operated as a live service. This repository intentionally contains only the idea, interface captures, and this static frontend showcase. It has no backend, routing service, database, credentials, or deployment infrastructure.
+        </p>
+      </section>
+    </main>
+
+    <footer>
+      <span>CycleWhere</span>
+      <span>A fairer finish to a group ride.</span>
+    </footer>
+
+    <dialog class="lightbox" aria-label="Expanded interface screenshot">
+      <button class="close" type="button" aria-label="Close image">×</button>
+      <img src="" alt="" />
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>
