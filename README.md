@@ -36,6 +36,8 @@ Open `index.html` directly in a browser to view the showcase. No build step or n
 
 The project is archived and the live product should not be considered operational. The original private implementation is not part of this public repository.
 
+The frontend-only archive was rechecked on 1 August 2026. See the [public archive audit](ARCHIVE_AUDIT.md) for the verification scope and results.
+
 ## License
 
 MIT
